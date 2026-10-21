@@ -1,0 +1,282 @@
+name: cross-platform
+
+# The engine is meant to run on macOS, Linux and Windows. macOS and Linux were
+# verified by hand; Windows never was, and the defects that only appear there
+# (winerror vs errno, MoveFileExW semantics, reserved names) are exactly the ones
+# that break data-safety promises. This workflow makes that gap impossible to
+# ignore by running the same suite on all three platforms.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: engine (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+          - os: windows-latest
+            label: windows
+          - os: macos-latest
+            label: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install engine dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # Install the lock file itself. The comment said "same pinned versions the
+          # app ships" while the command asked pip for the newest of everything, so a
+          # dependency could drift away from the artifact between two runs.
+          python -m pip install -r third_party/requirements.lock
+
+      - name: Install LibreOffice (Linux)
+        if: matrix.label == 'linux'
+        run: |
+          sudo apt-get update
+          # libreoffice-common ships /usr/bin/soffice and the real binary under
+          # /usr/lib/libreoffice/program (libreoffice-core only has soffice.bin).
+          sudo apt-get install -y libreoffice-core libreoffice-common libreoffice-impress libreoffice-writer fonts-noto-cjk
+
+      - name: Install LibreOffice (Windows)
+        if: matrix.label == 'windows'
+        shell: pwsh
+        run: |
+          choco install libreoffice-fresh -y --no-progress
+          # The engine looks on PATH and in known install roots; make sure the
+          # freshly installed soffice is reachable for this step.
+          $exe = Get-ChildItem "C:\Program Files\LibreOffice\program\soffice.exe" -ErrorAction SilentlyContinue
+          if (-not $exe) { Write-Error "LibreOffice install did not produce soffice.exe" }
+          Write-Host "found: $($exe.FullName)"
+
+      - name: Install LibreOffice (macOS)
+        if: matrix.label == 'macos'
+        run: |
+          brew install --cask libreoffice
+
+      - name: Show renderer discovery
+        shell: bash
+        run: python engine/platform_office.py
+
+      - name: Office conversion must run, not skip
+        # Every platform in this matrix installs LibreOffice, and a broken discovery
+        # made the Office test skip silently while the job stayed green. Assert on the
+        # counts, not on a substring: "-k office" selects more than one test, so the
+        # question is "did Office tests really pass here", not "is there a 1".
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          found=$(python engine/platform_office.py)
+          echo "renderer: $found"
+          case "$found" in
+            *not\ found*) echo "LibreOffice is installed but the engine cannot find it"; exit 1;;
+          esac
+          python - <<'PY'
+          import re, subprocess, sys
+          # The named test, not "-k office": that also selects a naming test that never
+          # converts anything, so the step could pass with the real one removed.
+          run = subprocess.run([sys.executable, "-m", "pytest",
+                                "tests/test_engine.py::test_office_render", "-q", "-rs"],
+                               capture_output=True, text=True)
+          print(run.stdout[-3000:])
+          passed = int(re.search(r"(\d+) passed", run.stdout).group(1)) if re.search(r"(\d+) passed", run.stdout) else 0
+          skipped = int(re.search(r"(\d+) skipped", run.stdout).group(1)) if re.search(r"(\d+) skipped", run.stdout) else 0
+          if run.returncode or passed < 1 or skipped:
+              print("Office conversion must run and pass here: passed=%d skipped=%d rc=%d"
+                    % (passed, skipped, run.returncode))
+              sys.exit(1)
+          print("office tests passed: %d, skipped: %d" % (passed, skipped))
+          PY
+
+      - name: Probe the engine directly
+        # A failing assertion in pytest only shows the assertion. When the engine
+        # emits {"type":"fatal"} the reason lives in the event detail, so run one
+        # request by hand and print every event before running the suite.
+        #
+        # PYTHONIOENCODING matters: this probe itself prints the engine's Chinese
+        # paths, and a Windows console would raise UnicodeEncodeError here — which
+        # is exactly how the first version of this step failed instead of the engine.
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys, tempfile
+          from pathlib import Path
+          from PIL import Image
+          tmp = Path(tempfile.mkdtemp())
+          src = tmp / "probe.png"
+          Image.new("RGB", (8, 8), "blue").save(src)
+          req = tmp / "request.json"
+          req.write_text(json.dumps({"inputs": [str(src)], "output": str(tmp / "out"),
+                                     "config": {"operation": "image_convert",
+                                                "format": "png", "quality": 90}}),
+                         encoding="utf-8")
+          proc = subprocess.run([sys.executable, "-I", "engine/workbench.py",
+                                 "--request", str(req)],
+                                capture_output=True, text=True, encoding="utf-8")
+          print("returncode:", proc.returncode)
+          for line in proc.stdout.splitlines():
+              print("EVENT", line)
+          print("STDERR", proc.stderr[-2000:])
+          PY
+
+      - name: Run engine suite
+        shell: bash
+        # PYTHONIOENCODING keeps pytest's own output (which contains Chinese test
+        # names and paths) from hitting the Windows console code page.
+        env:
+          PYTHONIOENCODING: utf-8
+        # pipefail: without it a failing pytest piped into tee exits 0 and the job
+        # goes green regardless. The exit code is asserted explicitly below.
+        run: |
+          set -o pipefail
+          python -m pytest tests -q -rs -x --tb=short 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          echo "pytest exit: $status"
+          exit $status
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-${{ matrix.label }}
+          path: pytest.log
+          if-no-files-found: ignore
+
+  package:
+    name: linux package
+    runs-on: ubuntu-latest
+    # The artifact users install must be built and installed for real. A green
+    # source-tree test says nothing about whether the .deb installs or whether the
+    # bundled wheels are complete, so this job builds the package, installs it, and
+    # converts with it.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the .deb
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python scripts/build_linux.py --out dist
+
+      - name: Install and convert with it
+        # CHAMO_ROOT: verify_deb.sh defaults to /w because the Docker wrapper mounts
+        # the checkout there. On a runner the checkout is the workspace, and without
+        # this every fixture path resolves to a missing file — which is exactly how
+        # the first CI run failed: every conversion exited 2 (bad input).
+        # PYTHONIOENCODING: the probe prints Chinese paths and the runner locale is
+        # not guaranteed to be UTF-8.
+        env:
+          CHAMO_ROOT: ${{ github.workspace }}
+          PYTHONIOENCODING: utf-8
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -o pipefail
+          sudo dpkg -i dist/chamo-cli_*.deb
+          # LibreOffice is a Recommends, so install it explicitly: Office
+          # conversion must be exercised, not skipped.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libreoffice-core libreoffice-impress libreoffice-writer fonts-noto-cjk || true
+          bash scripts/verify_deb.sh 2>&1 | tee verify.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Upload package and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: |
+            dist/*.deb
+            verify.log
+          if-no-files-found: warn
+
+
+  windows-package:
+    name: windows package
+    runs-on: windows-latest
+    # Windows has never had a distributable artifact. The package can only be built
+    # and verified on Windows: it embeds the Windows embeddable CPython and native
+    # win_amd64 wheels, neither of which can be produced meaningfully elsewhere.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the portable package
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python scripts/build_windows.py --out dist
+
+      - name: Install LibreOffice
+        # The portable package does not bundle LibreOffice. Installing it on the runner
+        # is what makes the "already installed, so it must be discovered and used" path
+        # real; without it this job only ever proved the missing-renderer degrade path.
+        shell: pwsh
+        run: |
+          choco install libreoffice-fresh -y --no-progress
+          $exe = Get-ChildItem "C:\Program Files\LibreOffice\program\soffice.exe" -ErrorAction SilentlyContinue
+          if (-not $exe) { Write-Error "LibreOffice install did not produce soffice.exe" }
+
+      - name: Extract and convert with it
+        # The verification runs under the package interpreter, so a missing bundled
+        # wheel fails here instead of on a user machine.
+        env:
+          PYTHONIOENCODING: utf-8
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/chamo-cli_*.zip | Select-Object -First 1
+          Write-Host "extracting $($zip.Name)"
+          Expand-Archive -Path $zip.FullName -DestinationPath dist/extracted -Force
+          $pkg = "dist/extracted/chamo"
+          & "$pkg/python/python.exe" scripts/verify_windows.py --package $pkg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Drive the packaged UI
+        # The page is served by the packaged interpreter, so a missing wheel in the
+        # ZIP breaks it here, not on a user's machine. Two launches: --package goes
+        # straight to the interpreter (bundled runtime, no cmd.exe in between), and
+        # --chamo uses the .cmd wrapper the user guide tells Windows users to run, so a
+        # broken launcher cannot ship while the interpreter path still passes.
+        env:
+          PYTHONIOENCODING: utf-8
+        shell: pwsh
+        run: |
+          $pkg = "dist/extracted/chamo"
+          & "$pkg/python/python.exe" scripts/verify_ui.py --package $pkg --work dist/ui-accept
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$pkg/python/python.exe" scripts/verify_ui.py --chamo "$pkg/chamo.cmd" --work dist/ui-accept-cmd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: dist/*.zip
+          if-no-files-found: warn
+

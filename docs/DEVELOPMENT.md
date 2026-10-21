@@ -1,0 +1,61 @@
+# 开发说明
+
+## 项目结构
+
+| 目录 | 内容 |
+| --- | --- |
+| `Sources/` | macOS 原生应用（SwiftUI/AppKit）。`ImageDecode.swift` 是单独编译的 HEIC 解码辅助程序 |
+| `engine/` | 转换引擎（Python）：`workbench.py` 负责任务编排与转换，`chamo.py` 是命令行入口，`ui.py` 是 Windows/Linux 的本机浏览器界面，`platform_*.py` 是平台适配层，`cloud_kb_pack/` 是 RAG 严格拆分引擎 |
+| `scripts/` | 依赖下载、构建、打包与 CI 验收脚本 |
+| `tests/` | 引擎测试（pytest）与 Swift 单元测试 |
+| `assets/brand/` | Logo、图标与吉祥物的源文件和生成脚本 |
+| `config/release.json` | 版本号、构建号与仓库地址 |
+
+macOS 应用、命令行和浏览器界面调用同一个引擎，规则只有一份。平台差异集中在 `engine/platform_*.py`，架构概览见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+## 准备环境
+
+需要 Apple Silicon Mac、Xcode Command Line Tools 和 Python 3。
+
+```sh
+python3 scripts/bootstrap_dependencies.py
+```
+
+它会下载固定版本的独立 Python 与 LibreOffice，校验 SHA-256 后安装锁定版本的 Python 依赖，全部放在 `third_party/`（不进入 Git）。
+
+## 测试
+
+```sh
+third_party/python/bin/python3 -m pytest tests -q
+
+mkdir -p build
+swiftc -parse-as-library Sources/GitHubFeedback.swift tests/FeedbackTests.swift -o build/feedback-tests
+./build/feedback-tests
+swiftc -parse-as-library Sources/GitHubFeedback.swift Sources/UpdateCheck.swift tests/UpdateTests.swift -o build/update-tests
+./build/update-tests
+```
+
+测试只使用合成样例（`tests/fixtures/`，可用 `scripts/create_fixtures.py` 重新生成），不读取真实用户文件。部分用例只适用于某个平台，在其他平台上会打印原因并跳过。
+
+## 构建与打包
+
+```sh
+python3 scripts/build_app.py                          # build/Chamo.app
+third_party/python/bin/python3 scripts/collect_sources.py
+python3 scripts/package_dmg.py                        # release/Chamo-<version>-AppleSilicon.dmg
+python3 scripts/packaged_smoke.py build/Chamo.app     # 用包内运行时跑核心转换流程
+```
+
+Windows 与 Linux 包由 CI 构建：`scripts/build_windows.py --out dist` 生成便携 ZIP，`scripts/build_linux.py --out dist` 生成 `.deb`。
+
+## 持续集成
+
+`.github/workflows/cross-platform.yml` 在 Ubuntu、Windows、macOS 上安装真实 LibreOffice 并运行同一套引擎测试；Office 用例必须真正执行，不允许被跳过。它还会构建 Linux deb 和 Windows 便携包，安装或解压后用真实产物跑转换与界面验收（`scripts/verify_deb.sh`、`scripts/verify_windows.py`、`scripts/verify_ui.py`）。
+
+## 界面调试
+
+用 `-D CHAMO_DEBUG` 编译的调试版会读取一组 `CHAMO_*` 环境变量（见 `Sources/DebugHooks.swift`），用于自动添加文件、切换工具、开始转换和截图。这些钩子只存在于调试版，发布版二进制中不包含。
+
+## 品牌资源
+
+修改 `assets/brand/` 下的源脚本后运行 `assets/brand/build.sh`，会重新生成 SVG、`Chamo.icns` 和 README 用到的 PNG。说明见 [assets/brand/README.md](../assets/brand/README.md)。

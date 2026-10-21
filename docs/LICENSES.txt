@@ -1,0 +1,18 @@
+第三方组件与来源
+
+此包包含 LibreOffice 26.2.6 arm64，其 LICENSE/NOTICE/CREDITS 和源代码获取信息随 LibreOffice.app 保留。项目为独立调用其可执行程序，**未修改 LibreOffice 的源代码**。
+**分发形式说明（重要）**：为控制安装体积，本安装包删除了 LibreOffice 中与转换无关的终端用户资源目录：离线帮助、扩展管理器、剪贴画库、Java 桥、文档模板、向导、xpdfimport、内嵌的 LibreOffice Python，以及 21 个 GUI 图标主题（config/images_*.zip）。这些资源仅服务于图形界面，不参与 headless 文档转换。
+已验证：PPTX 与 PDF 经裁剪前后转换，**逐页渲染像素完全一致**（150 dpi 逐页比较）。不比较 PDF 字节：LibreOffice 会写入创建时间与文档 ID，同一二进制重复转换的字节本身就不同，字节比较不能证明任何事。**HTML 输入不在本产品支持的转换格式内**，且裁剪前后确有渲染差异，因此不声称所有格式一致。
+由于删除资源使 The Document Foundation 的原始签名失效，包内副本已用本项目的 ad-hoc 签名重新封装。重新签名会重写 Mach-O 的 CodeDirectory，**因此包内二进制文件在签名意义上已被修改**（源代码未改）。**它不是「原样分发的 LibreOffice」**：本项目不声称该副本带有 TDF 签名，也不声称其经由 TDF 验证。
+MPL-2.0 的源代码可获得性要求不受影响（未修改源代码），对应源码地址如下；如需完整未删减的 LibreOffice，可从官方站点获取。
+官方网站：https://www.libreoffice.org/ licenses: https://www.libreoffice.org/licenses/
+源码对应版本：https://download.documentfoundation.org/libreoffice/src/26.2.6/
+
+独立 Python：python-build-standalone CPython 3.12.15，20261013 arm64发行；包含其随附许可文件。为控制体积，安装包未包含 pip、pytest 等构建/测试工具、fixture 生成用依赖（reportlab、python-pptx、XlsxWriter）、GUI 标准库模块（idlelib、tkinter）与开发头文件；这些均不参与运行时转换。
+来源：https://github.com/astral-sh/python-build-standalone/releases/tag/20261013
+
+Python依赖的具体固定版本见 requirements.lock，许可证随 python/lib/python3.12/site-packages/*dist-info/licenses 或 LICENSE 文件保留。包含 pypdf、pypdfium2/PDFium、Pillow、lxml、cryptography、openpyxl、olefile、xlrd、img2pdf、pikepdf/qpdf 等；各项目保留各自版权。源码发行包与获取链接见安装介质 ThirdPartySources 目录。HEIC 解码使用 Apple 系统 ImageIO，不分发第三方 HEVC 编解码器。
+
+RAG引擎参考Tencent/WeKnora的方法及归属见 RAG-THIRD-PARTY-NOTICES.md。Chamo 复用本项目已有cloud-kb-pack代码，不包含WPS专有代码、图标或安装包。
+
+本机发行未经过商业许可证法律审查；正式商业发布前需要逐项复核分发构建、源码可获得性、品牌与签名要求。

@@ -1,0 +1,39 @@
+# 系统与编辑器
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# 密钥与证书
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# 构建产物（都能重新生成；也覆盖 assets/brand/build/）
+build/
+release/
+dist/
+
+# 内置运行时（由 scripts/bootstrap_dependencies.py 下载）
+third_party/*
+!third_party/requirements.lock
+!third_party/dependencies.json
+
+# 仅本地：AI 协作说明、调研、日志
+AGENTS.md
+CLAUDE.md
+.claude/
+.codex/
+local/
+artifacts/
+research/
+design/

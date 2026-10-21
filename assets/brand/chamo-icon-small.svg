@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22B083"/><stop offset="1" stop-color="#0E7356"/></linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.18"/><stop offset="0.55" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <clipPath id="page"><path d="M30 47 H74 L90 63 V104 H30 Z"/></clipPath>
+    <clipPath id="front"><rect x="60" y="0" width="60" height="120"/></clipPath>
+  </defs>
+  <g transform="translate(64 64) scale(7.4667)">
+  <rect width="120" height="120" rx="27" fill="url(#plate)"/>
+  <path d="M26 46 H78 L96 64 V108 H26 Z" fill="#fff"/>
+  <path d="M26 82 H96 V108 H26 Z" fill="#FFC85C"/>
+  <path d="M32 40 C18 40 12 52 18 60 C23 66 32 62 29 55" stroke="#A8EBD3" stroke-width="9" stroke-linecap="round" fill="none"/>
+  <path d="M30 46 C30 30 44 20 60 20 C76 20 88 28 96 40 C88 46 76 47 60 46 Z" fill="#A8EBD3"/>
+  <path d="M60 20 C76 20 88 28 96 40 C88 46 76 47 60 46 Z" fill="#FFC85C"/>
+  <circle cx="78" cy="33" r="7" fill="#fff"/><circle cx="80" cy="33" r="3.2" fill="#3B2500"/>
+  </g>
+</svg>
