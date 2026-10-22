@@ -407,7 +407,8 @@ def check_image_pairs(pairs, mode: str = "lossless", lossy_target: bool = False)
                                       "is smaller and still looks similar)"
                                       % (source.name, left.size, right.size))
                         continue
-                    if ssim(left, right) < LOSSY_SSIM_MIN:
+                    score = ssim(left, right)
+                    if score < LOSSY_SSIM_MIN:
                         issues.append("%s: lossy result differs too much "
                                       "(SSIM %.4f < %.2f, PSNR %.1f dB on the "
                                       "downscaled grey comparison)"
