@@ -164,3 +164,115 @@ def test_a_render_change_under_compression_is_reported(tmp_path):
     (changed_dir / "source_压缩.pdf").write_bytes(changed.read_bytes())
     issues = quality.check_pdf_compress(source, changed_dir)
     assert any("rendered at 72 dpi" in issue for issue in issues), issues
+
+
+def test_losing_pages_under_compression_is_reported_not_crashed(tmp_path):
+    """The check must report a truncated result, not raise on the shorter file."""
+    from pypdf import PdfReader, PdfWriter
+
+    source = _source_pdf(tmp_path / "source.pdf", 6)
+    truncated = tmp_path / "truncated.pdf"
+    # Cut it down to two pages: the sample range is computed from the source, so
+    # the shorter result is exactly the case that used to raise IndexError.
+    cut = PdfWriter()
+    for index in range(2):
+        cut.add_page(PdfReader(str(source)).pages[index])
+    with open(truncated, "wb") as handle:
+        cut.write(handle)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "source_压缩.pdf").write_bytes(truncated.read_bytes())
+    issues = quality.check_pdf_compress(source, out)
+    assert any("page count changed 6 -> 2" in issue for issue in issues), issues
+
+
+def _split(source: Path, out_dir: Path, plan) -> None:
+    """Write parts[ (page range, file name) ] with pypdf, in the order given."""
+    from pypdf import PdfReader, PdfWriter
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    reader = PdfReader(str(source))
+    for name, pages in plan:
+        writer = PdfWriter()
+        for index in pages:
+            writer.add_page(reader.pages[index])
+        with open(out_dir / name, "wb") as handle:
+            writer.write(handle)
+
+
+def test_a_correct_split_passes_and_a_broken_one_fails(tmp_path):
+    source = _source_pdf(tmp_path / "source.pdf", 4)
+    good = tmp_path / "good"
+    _split(source, good, [("part_1.pdf", [0, 1]), ("part_2.pdf", [2, 3])])
+    assert quality.check_pdf_split(source, good) == []
+
+    # a part is missing: the union is no longer the source
+    missing = tmp_path / "missing"
+    _split(source, missing, [("part_1.pdf", [0, 1])])
+    issues = quality.check_pdf_split(source, missing)
+    assert any("split parts hold 2 page(s)" in issue for issue in issues), issues
+
+    # the parts exist but are swapped
+    swapped = tmp_path / "swapped"
+    _split(source, swapped, [("part_1.pdf", [2, 3]), ("part_2.pdf", [0, 1])])
+    issues = quality.check_pdf_split(source, swapped)
+    assert any("text changed after splitting" in issue for issue in issues), issues
+
+
+def test_more_than_nine_parts_are_ordered_by_number_not_by_string(tmp_path):
+    """part_10 sorts before part_2 as a string, which would fail a correct split."""
+    source = _source_pdf(tmp_path / "source.pdf", 12)
+    out = tmp_path / "many"
+    _split(source, out, [("part_%d.pdf" % (n + 1), [n]) for n in range(12)])
+    assert quality.check_pdf_split(source, out) == []
+
+
+def test_the_strict_export_must_be_the_source_and_nothing_else(tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.pdf").write_bytes(b"document a")
+    (source / "b.pdf").write_bytes(b"document b")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "a.pdf").write_bytes(b"document a")
+    (out / "b.pdf").write_bytes(b"document b")
+    assert quality.check_rag([source / "a.pdf", source / "b.pdf"], out) == []
+
+    (out / "b.pdf").write_bytes(b"document B")          # changed bytes
+    issues = quality.check_rag([source / "a.pdf", source / "b.pdf"], out)
+    assert any("b.pdf" in issue and "differ" in issue for issue in issues), issues
+
+    (out / "b.pdf").unlink()                            # missing file
+    issues = quality.check_rag([source / "a.pdf", source / "b.pdf"], out)
+    assert any("not in the strict export" in issue for issue in issues), issues
+
+    (out / "stray.txt").write_bytes(b"not asked for")   # extra file
+    issues = quality.check_rag([source / "a.pdf"], out)
+    assert any("does not have" in issue for issue in issues), issues
+
+
+def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "photo.png"
+    image = Image.new("RGB", (32, 24), (10, 120, 200))
+    image.save(source)
+
+    converted = tmp_path / "converted.jpg"
+    image.save(converted, "JPEG", quality=95)
+    assert quality.check_image_pairs([(source, converted)], mode="convert") == []
+
+    other = Image.new("RGB", (32, 24), (200, 10, 10))
+    changed = tmp_path / "changed.jpg"
+    other.save(changed, "JPEG", quality=95)
+    issues = quality.check_image_pairs([(source, changed)], mode="convert")
+    assert any("changed the picture" in issue for issue in issues), issues
+
+    # lossy is measured, not required to be identical: a mild JPEG passes,
+    # a different picture does not.
+    mild = tmp_path / "mild.jpg"
+    image.save(mild, "JPEG", quality=60)
+    assert quality.check_image_pairs([(source, mild)], mode="lossy") == []
+    issues = quality.check_image_pairs([(source, changed)], mode="lossy")
+    assert any("differs too much" in issue for issue in issues), issues
