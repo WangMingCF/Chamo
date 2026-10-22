@@ -80,7 +80,9 @@ def deliverables(out_dir) -> list:
         if relative.parts and (relative.parts[0] in RECORD_DIRS
                                or relative.parts[0].startswith(".")):
             continue
-        if relative.name == MANIFEST_NAME:
+        # Only the top-level manifest is bookkeeping; a same-named file in a
+        # subdirectory is a deliverable and must stay visible to the checks.
+        if relative.parts == (MANIFEST_NAME,):
             continue
         files.append(path)
     return files
@@ -390,11 +392,10 @@ def check_image_pairs(pairs, mode: str = "lossless") -> list:
                                       % (source.name, score, LOSSY_SSIM_MIN, psnr(left, right)))
                     continue
                 if mode == "convert":
-                    # A conversion into a lossy container is allowed to lose detail -
-                    # that is what choosing JPEG means - so it is measured, not
-                    # required to be identical. A conversion that stays lossless
-                    # must be pixel-identical.
-                    lossy_target = Path(output).suffix.lower() in (".jpg", ".jpeg", ".webp")
+                    # Whether a conversion may lose detail is the caller's decision
+                    # - the engine knows whether it ran lossless - not the file
+                    # suffix's: WebP exists in both forms, and PNG to lossless WebP
+                    # must still be pixel-identical or this gate quietly weakens.
                     if lossy_target:
                         score = ssim(left, right)
                         if score < CONVERT_SSIM_MIN:
@@ -434,7 +435,7 @@ def check_image_pairs(pairs, mode: str = "lossless") -> list:
     return issues
 
 
-def check_image_set(sources, out_dir, mode: str = "lossless") -> list:
+def check_image_set(sources, out_dir, mode: str = "lossless", lossy_target: bool = False) -> list:
     """Pair by file name, for a single-image run and for the unit tests."""
     files = deliverables(out_dir)
     pairs = []
@@ -445,23 +446,31 @@ def check_image_set(sources, out_dir, mode: str = "lossless") -> list:
         if len(matches) != 1:
             return ["%s: expected one output, found %d" % (source.name, len(matches))]
         pairs.append((source, matches[0]))
-    return check_image_pairs(pairs, mode)
+    return check_image_pairs(pairs, mode, lossy_target)
 
 
 def _part_order(path: Path):
-    """Sort split parts by the first number in the name, numerically.
+    """Sort split parts by the LAST number in the name, numerically.
 
-    Plain string order puts part_10 before part_2, which would make a correct
-    10-part split compare every page against the wrong part and report a failure
-    that is not there. A part without a number sorts after the numbered ones and
-    keeps a stable order between runs.
+    Plain string order puts _10 before _2, which would make a correct ten-part
+    split compare every page against the wrong part and report a failure that is
+    not there. The last number, not the first: a source called report_2024.pdf
+    carries its own year into every part name, and the part number is what
+    follows it. A name without a number sorts after the numbered ones and keeps a
+    stable order between runs.
     """
     numbers = re.findall(r"\d+", path.stem)
-    return (0, int(numbers[0]), path.name) if numbers else (1, 0, path.name)
+    return (0, int(numbers[-1]), path.name) if numbers else (1, 0, path.name)
 
 
 def check_pdf_split(source_pdf, out_dir) -> list:
-    """The parts are the source, page for page, in order."""
+    """The parts are the source, page for page and in order - by text layer.
+
+    The comparison is the extracted text of every page, which catches lost,
+    duplicated and reordered pages cheaply. It does not re-render the pages, so a
+    split that kept the text and rewrote the pictures would pass; that is a known
+    limit of this check, not a claim of pixel identity (compression has its own
+    check, with a rendered sample)."""
     issues = []
     try:
         source_pages = pdf_text_pages(source_pdf)
