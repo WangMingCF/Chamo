@@ -351,11 +351,13 @@ jobs:
         run: python -m pytest uitests/browser -q -rs --tb=short --junitxml=ui-browser.xml
 
       - name: Build the debug macOS app
-        if: runner.os == 'macOS'
+        # Runs even when the browser tests failed, so one run reports both layers.
+        if: runner.os == 'macOS' && !cancelled()
         run: python scripts/build_dev_app.py --out build/dev --python-prefix "$(python -c 'import sys; print(sys.prefix)')"
 
       - name: macOS app scenarios
-        if: runner.os == 'macOS'
+        # Runs even when the browser tests failed, so one run reports both layers.
+        if: runner.os == 'macOS' && !cancelled()
         run: python -m pytest uitests/macos -q -rs --tb=short --junitxml=ui-macos.xml
 
       - name: Judge the runs
