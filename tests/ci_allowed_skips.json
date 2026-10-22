@@ -20,11 +20,6 @@
       "file": "tests/test_shard_equivalence.py",
       "reason": "speed gate skipped because CI is set: the >=1.5x threshold is machine-dependent (acceptance contract allows this skip on CI, and it is NOT a pass). Run on a quiet machine: python scripts/verify_shard.py --mode speed --perf on",
       "why": "shared runners are too noisy for a speed threshold; equivalence is still asserted"
-    },
-    {
-      "file": "tests/test_shard_equivalence.py",
-      "reason_prefix": "text timing gate inconclusive on this host: ",
-      "why": "the test measures its own noise and skips (not passes) when the runner is too noisy to judge; the no-sharding check itself still asserts. Tracked in docs/CI_TESTING.md section 8"
     }
   ],
   "linux": [
