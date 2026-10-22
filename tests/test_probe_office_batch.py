@@ -77,8 +77,11 @@ def _publish_numbers(report: dict) -> None:
     """
     import os
 
-    artifacts = Path("results")
-    if artifacts.is_dir():
+    # Only in CI: locally this would leave a results/ directory in the checkout,
+    # which is exactly the kind of stray artefact a test should not create.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        artifacts = Path("results")
+        artifacts.mkdir(parents=True, exist_ok=True)
         (artifacts / "office-probe.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")

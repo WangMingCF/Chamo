@@ -81,8 +81,6 @@ def build_inputs(directory: Path, count: int, source=None) -> list:
     Copies rather than N different documents: the two arms must do the same work,
     so the only difference between them is how many LibreOffice processes start.
     """
-    import shutil
-
     source = Path(source) if source else FIXTURE
     if not source.is_file():
         raise SystemExit("no input document at %s" % source)
@@ -95,28 +93,41 @@ def build_inputs(directory: Path, count: int, source=None) -> list:
     return files
 
 
-def convert_one(soffice: str, source: Path, out_dir: Path, profile: Path,
-                timeout: int) -> float:
-    out_dir.mkdir(parents=True, exist_ok=True)
+def _run_soffice(argv, timeout: int) -> dict:
+    """Run soffice once and report what happened, not only how long it took.
+
+    A failed conversion is often fast, and a fast failure averaged into the median
+    would make the batched arm look better for the wrong reason. So the return
+    code, a timeout and the tail of stderr travel with the seconds, and the caller
+    refuses to use a run that did not produce correct output.
+    """
     started = time.monotonic()
-    subprocess.run([soffice, "-env:UserInstallation=" + profile.as_uri(),
-                    "--headless", "--nologo", "--nodefault", "--nofirststartwizard",
-                    "--norestore", "--convert-to", "pdf", "--outdir", str(out_dir),
-                    str(source)],
-                   capture_output=True, timeout=timeout, check=False)
-    return time.monotonic() - started
+    try:
+        completed = subprocess.run(argv, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        return {"seconds": float(timeout), "rc": None, "timed_out": True,
+                "stderr": "timed out after %ds" % timeout}
+    return {"seconds": time.monotonic() - started, "rc": completed.returncode,
+            "timed_out": False,
+            "stderr": completed.stderr.decode("utf-8", "replace").strip()[-400:]}
+
+
+def convert_one(soffice: str, source: Path, out_dir: Path, profile: Path,
+                timeout: int) -> dict:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return _run_soffice([soffice, "-env:UserInstallation=" + profile.as_uri(),
+                         "--headless", "--nologo", "--nodefault", "--nofirststartwizard",
+                         "--norestore", "--convert-to", "pdf", "--outdir", str(out_dir),
+                         str(source)], timeout)
 
 
 def convert_batch(soffice: str, sources, out_dir: Path, profile: Path,
-                  timeout: int) -> float:
+                  timeout: int) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
-    subprocess.run([soffice, "-env:UserInstallation=" + profile.as_uri(),
-                    "--headless", "--nologo", "--nodefault", "--nofirststartwizard",
-                    "--norestore", "--convert-to", "pdf", "--outdir", str(out_dir)]
-                   + [str(path) for path in sources],
-                   capture_output=True, timeout=timeout, check=False)
-    return time.monotonic() - started
+    return _run_soffice([soffice, "-env:UserInstallation=" + profile.as_uri(),
+                         "--headless", "--nologo", "--nodefault", "--nofirststartwizard",
+                         "--norestore", "--convert-to", "pdf", "--outdir", str(out_dir)]
+                        + [str(path) for path in sources], timeout)
 
 
 def check_outputs(sources, out_dir: Path) -> list:
@@ -171,20 +182,25 @@ def main(argv=None) -> int:
     work = Path(tempfile.mkdtemp(prefix="chamo-office-probe-"))
     sources = build_inputs(work / "inputs", args.files)
     before = {path.name: sha256_file(path) for path in sources}
-    sequential, batched, issues = [], [], []
+    sequential, batched, issues, order = [], [], [], []
     try:
         for rep in range(args.reps):
-            # Interleaved and alternating: a load spike hits both arms, and the
-            # arm that runs first does not systematically pay the cold start.
-            if rep % 2 == 0:
-                sequential.append(convert_sequential(soffice, sources, work, rep, args.timeout))
-                batched.append(convert_batched(soffice, sources, work, rep, args.timeout))
-            else:
-                batched.append(convert_batched(soffice, sources, work, rep, args.timeout))
-                sequential.append(convert_sequential(soffice, sources, work, rep, args.timeout))
-        for name in ("sequential", "batched"):
-            issues += ["%s: %s" % (name, issue) for issue in
-                       check_outputs(sources, work / ("out-%s-%02d" % (name, args.reps - 1)))]
+            # Interleaved and alternating: a load spike hits both arms, and the arm
+            # that runs first does not systematically pay the cold start.
+            arms = ("sequential", "batched") if rep % 2 == 0 else ("batched", "sequential")
+            order.append(list(arms))
+            for arm in arms:
+                runner = convert_sequential if arm == "sequential" else convert_batched
+                run = runner(soffice, sources, work, rep, args.timeout)
+                # Every repetition is checked, not only the last one: a failed
+                # conversion is usually fast, and a fast failure would drag that
+                # arm's median down. A run whose output is wrong is not a
+                # measurement, and its time is reported but not adopted.
+                problems = list(run["failures"])
+                problems += check_outputs(sources, run["out_dir"])
+                issues += ["%s rep %d: %s" % (arm, rep + 1, problem)
+                           for problem in problems]
+                (sequential if arm == "sequential" else batched).append(run["seconds"])
         after = {path.name: sha256_file(path) for path in sources}
         if before != after:
             issues.append("an input file changed during the probe")
@@ -193,29 +209,40 @@ def main(argv=None) -> int:
 
     report = {"files": args.files, "reps": args.reps, "soffice": soffice,
               "sequential": summary(sequential), "batched": summary(batched),
-              "ratio": None, "issues": issues}
-    if report["sequential"]["median"] and report["batched"]["median"]:
+              "ratio": None, "issues": issues, "order": order}
+    if not issues and report["sequential"]["median"] and report["batched"]["median"]:
         report["ratio"] = round(report["batched"]["median"] / report["sequential"]["median"], 3)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    # ascii on the console: a Windows job can have a non-UTF-8 code page, and an
+    # encoding error here would turn a reported problem into a crash.
+    print(json.dumps(report, ensure_ascii=True, indent=2))
     if args.json:
         Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                                    encoding="utf-8")
     return 1 if issues or not sequential or not batched else 0
 
 
-def convert_sequential(soffice, sources, work: Path, rep: int, timeout: int) -> float:
+def convert_sequential(soffice, sources, work: Path, rep: int,
+                       timeout: int) -> dict:
     out_dir = work / ("out-sequential-%02d" % rep)
     profile = work / ("profile-sequential-%02d" % rep)
-    total = 0.0
+    total, failures = 0.0, []
     for source in sources:
-        total += convert_one(soffice, source, out_dir, profile, timeout)
-    return total
+        result = convert_one(soffice, source, out_dir, profile, timeout)
+        total += result["seconds"]
+        if result["timed_out"] or result["rc"] != 0:
+            failures.append("%s: rc=%s %s" % (Path(source).name, result["rc"],
+                                              result["stderr"]))
+    return {"seconds": total, "out_dir": out_dir, "failures": failures}
 
 
-def convert_batched(soffice, sources, work: Path, rep: int, timeout: int) -> float:
+def convert_batched(soffice, sources, work: Path, rep: int, timeout: int) -> dict:
     out_dir = work / ("out-batched-%02d" % rep)
     profile = work / ("profile-batched-%02d" % rep)
-    return convert_batch(soffice, sources, out_dir, profile, timeout)
+    result = convert_batch(soffice, sources, out_dir, profile, timeout)
+    failures = []
+    if result["timed_out"] or result["rc"] != 0:
+        failures.append("rc=%s %s" % (result["rc"], result["stderr"]))
+    return {"seconds": result["seconds"], "out_dir": out_dir, "failures": failures}
 
 
 if __name__ == "__main__":
