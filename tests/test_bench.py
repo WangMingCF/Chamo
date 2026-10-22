@@ -96,7 +96,7 @@ def test_refuses_to_write_over_a_previous_corpus(tmp_path):
 # --------------------------------------------------------------------------
 # Helpers for the quality checks
 # --------------------------------------------------------------------------
-def _pages_at(directory: Path, images, dpi: int, stem: str = "doc") -> Path:
+def _pages_at(directory: Path, images, stem: str = "doc") -> Path:
     """Write a page set the way the engine names it, from rendered pages."""
     directory.mkdir(parents=True, exist_ok=True)
     for number, image in sorted(images.items()):
@@ -120,28 +120,28 @@ def _source_pdf(path: Path, pages: int = 3) -> Path:
 
 def test_identical_render_passes_and_every_shortcut_fails(tmp_path):
     source = _source_pdf(tmp_path / "source.pdf", 3)
-    reference = _pages_at(tmp_path / "good", quality.render_pdf_pages(source, 72), 72)
+    reference = _pages_at(tmp_path / "good", quality.render_pdf_pages(source, 72))
     assert quality.check_pdf_images(source, reference, 72) == []
 
     # 1. one page missing: "faster" by doing less work.
-    missing = _pages_at(tmp_path / "missing", quality.render_pdf_pages(source, 72), 72)
+    missing = _pages_at(tmp_path / "missing", quality.render_pdf_pages(source, 72))
     (missing / "doc_002.png").unlink()
     assert any("missing 1 page" in issue for issue in quality.check_pdf_images(source, missing, 72))
 
     # 2. a page rendered at a lower DPI: the classic way to fake a speed-up.
-    low_dpi = _pages_at(tmp_path / "low-dpi", quality.render_pdf_pages(source, 36), 36)
+    low_dpi = _pages_at(tmp_path / "low-dpi", quality.render_pdf_pages(source, 36))
     issues = quality.check_pdf_images(source, low_dpi, 72)
     assert any("size" in issue for issue in issues), issues
 
     # 3. the right number of pages, but one belongs to another document.
-    swapped = _pages_at(tmp_path / "swapped", quality.render_pdf_pages(source, 72), 72)
+    swapped = _pages_at(tmp_path / "swapped", quality.render_pdf_pages(source, 72))
     other = _source_pdf(tmp_path / "other.pdf", 1)
     quality.render_pdf_pages(other, 72)[1].save(swapped / "doc_003.png", "PNG")
     issues = quality.check_pdf_images(source, swapped, 72)
     assert any("page 3" in issue for issue in issues), issues
 
     # 4. an extra page file that the selection never asked for.
-    extra = _pages_at(tmp_path / "extra", quality.render_pdf_pages(source, 72), 72)
+    extra = _pages_at(tmp_path / "extra", quality.render_pdf_pages(source, 72))
     (extra / "doc_004.png").write_bytes((extra / "doc_001.png").read_bytes())
     assert any("does not contain" in issue for issue in quality.check_pdf_images(source, extra, 72))
 
@@ -185,6 +185,94 @@ def test_lossless_image_work_must_not_change_pixels(tmp_path):
     assert any("not identical" in issue for issue in issues), issues
 
 
+def test_dropping_a_png_text_chunk_is_reported(tmp_path):
+    """The corpus writes a caption into its RGBA sample; losing it is a regression."""
+    from PIL import Image, PngImagePlugin
+
+    image = Image.new("RGBA", (20, 10), (1, 2, 3, 128))
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Description", "keep me")
+    source = tmp_path / "source.png"
+    image.save(source, pnginfo=info)
+    kept = tmp_path / "kept.png"
+    image.save(kept, pnginfo=info)
+    assert quality.check_image_pairs([(source, kept)]) == []
+    stripped = tmp_path / "stripped.png"
+    image.save(stripped)
+    issues = quality.check_image_pairs([(source, stripped)])
+    assert any("text metadata" in issue for issue in issues), issues
+
+
+def _page_pdf(path: Path, extra_drawing: bool = False) -> Path:
+    from reportlab.pdfgen import canvas
+
+    canvas_obj = canvas.Canvas(str(path), invariant=1)
+    canvas_obj.setFont("Helvetica", 12)
+    canvas_obj.drawString(60, 760, "The same text on every page")
+    if extra_drawing:
+        canvas_obj.rect(100, 400, 200, 100, fill=1)
+    canvas_obj.showPage()
+    canvas_obj.save()
+    return path
+
+
+def test_a_render_change_under_compression_is_reported(tmp_path):
+    """Same text, different picture: the page check, not only the text check."""
+    source = _page_pdf(tmp_path / "source.pdf")
+    same = _page_pdf(tmp_path / "same.pdf")
+    same_dir = tmp_path / "same"
+    same_dir.mkdir()
+    (same_dir / "source_压缩.pdf").write_bytes(same.read_bytes())
+    assert quality.check_pdf_compress(source, same_dir) == []
+
+    changed = _page_pdf(tmp_path / "changed.pdf", extra_drawing=True)
+    changed_dir = tmp_path / "changed"
+    changed_dir.mkdir()
+    (changed_dir / "source_压缩.pdf").write_bytes(changed.read_bytes())
+    issues = quality.check_pdf_compress(source, changed_dir)
+    assert any("rendered at 72 dpi" in issue for issue in issues), issues
+
+
+def test_holdout_cases_are_named_for_their_own_corpus():
+    """A "text120" case that runs on a 37-page document is a wrong label."""
+    holdout = corpus.SUITES["holdout"]
+    representative = corpus.SUITES["representative"]
+    names = {case["name"] for case in bench.CASES["holdout"]}
+    assert "pdf-images.text%d" % holdout["text_pages"] in names
+    assert "pdf-images.scan%d" % holdout["scan_pages"] in names
+    assert "pdf-images.text%d" % representative["text_pages"] not in names
+
+
+def test_a_timed_out_command_is_a_failure(monkeypatch):
+    """run_command reports rc=None when it gives up; that must not read as a pass."""
+    def fake_run_command(argv, timeout):
+        return {"seconds": timeout, "timed_out": True, "rc": None, "stderr": "",
+                "output_bytes": 0, "outputs": 0}
+
+    monkeypatch.setattr(bench, "run_command", fake_run_command)
+    record = bench.run_case({"name": "engine.probe", "kind": "command", "argv": ["x"]},
+                            Path("/nonexistent"), Path("/nonexistent"), 1, 5, False)
+    assert record["status"] == "FAIL"
+    assert record["timing_adopted"] is False
+    assert any("timed out" in issue for issue in record["quality"]["issues"]), record
+
+
+def test_a_wrong_output_fails_the_case_and_its_timing_is_not_adopted(monkeypatch, tmp_path):
+    """The chain "quality finds a problem -> case FAIL -> timing not adopted"."""
+    def fake_run_engine(inputs, out_dir, operation, config, timeout):
+        return {"seconds": 1.0, "timed_out": False, "rc": 0, "stderr": "",
+                "output_bytes": 0, "outputs": 0, "report": {}}
+
+    monkeypatch.setattr(bench, "run_engine", fake_run_engine)
+    monkeypatch.setattr(bench, "quality_issues", lambda *args, **kwargs: ["page 1: differs"])
+    case = {"name": "pdf-images.text", "operation": "pdf_images", "input": "text.pdf",
+            "config": {}, "quality": {}}
+    record = bench.run_case(case, tmp_path, tmp_path, 1, 5, False)
+    assert record["status"] == "FAIL"
+    assert record["timing_adopted"] is False
+    assert record["quality"]["issues"]
+
+
 def test_summarise_reports_median_and_spread_and_ignores_timeouts():
     runs = [{"seconds": 2.0}, {"seconds": 2.2}, {"seconds": 2.4}]
     summary = bench.summarise(runs)
@@ -207,7 +295,8 @@ def test_the_smoke_suite_runs_and_reports(tmp_path):
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["environment"]["CHAMO_PAGE_CACHE"] == "0"
     case = report["cases"][0]
-    assert case["name"] == "pdf-images.text" and case["status"] == "PASS"
+    assert case["name"].startswith("pdf-images.text") and case["status"] == "PASS"
+    assert case["timing_adopted"] is True
     assert case["median_seconds"] and case["median_seconds"] > 0
     assert case["quality"]["issues"] == []
     assert report["corpus"]["manifest_sha256"]

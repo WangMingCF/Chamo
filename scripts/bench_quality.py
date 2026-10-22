@@ -18,7 +18,8 @@ What each check is for
                        PNG text chunks); lossy work reports PSNR/SSIM instead of
                        claiming identity.
 * check_pdf_split    - the union of the parts is the source, page for page.
-* check_pdf_compress - page count, text layer and per-page pictures survive.
+* check_pdf_compress - page count, text layer and a bounded sample of rendered
+                       pages survive.
 * check_rag          - the strict export is byte-identical to its input.
 
 SSIM is implemented here because numpy is deliberately not in the dependency
@@ -159,14 +160,6 @@ def ssim(left, right, sample: int = 64, window: int = 7) -> float:
             total += numerator / denominator if denominator else 0.0
             count += 1
     return total / count if count else 0.0
-
-
-def mean_abs(left, right, sample: int = 64) -> float:
-    a, width, height = _grey_pixels(left, sample)
-    b, width_b, height_b = _grey_pixels(right, sample)
-    if (width, height) != (width_b, height_b):
-        return 255.0
-    return sum(abs(x - y) for x, y in zip(a, b)) / float(len(a) or 1)
 
 
 def psnr(left, right) -> float:
@@ -368,9 +361,20 @@ def check_image_pairs(pairs, mode: str = "lossless") -> list:
                 if left.tobytes() != right.tobytes():
                     issues.append("%s: pixels are not identical (lossless work must not change them)"
                                   % source.name)
+                # Metadata is part of "lossless": a PNG text chunk the source
+                # carried (a caption, a DPI record, a colour profile) must survive,
+                # because the corpus deliberately puts one there to be lost.
                 for key, value in left.info.items():
-                    if key in ("icc_profile", "exif") and right.info.get(key) != value:
-                        issues.append("%s: %s was dropped" % (source.name, key))
+                    if key in ("icc_profile", "exif"):
+                        if right.info.get(key) != value:
+                            issues.append("%s: %s was dropped" % (source.name, key))
+                    elif isinstance(value, str) and right.info.get(key) != value:
+                        issues.append("%s: text metadata %r was dropped or changed"
+                                      % (source.name, key))
+                for key, value in right.info.items():
+                    if (isinstance(value, str) and key not in left.info
+                            and key not in ("transparency", "gamma", "dpi")):
+                        issues.append("%s: text metadata %r was added" % (source.name, key))
         except OSError as error:
             issues.append("%s: cannot compare (%s)" % (source.name, error))
     return issues
@@ -415,11 +419,15 @@ def check_pdf_split(source_pdf, out_dir) -> list:
     return issues
 
 
-def check_pdf_compress(source_pdf, out_dir) -> list:
+def check_pdf_compress(source_pdf, out_dir, sample: int = 8) -> list:
     """Compression keeps the pages, the text layer and the pictures.
 
-    Growth is reported rather than failed: the engine keeps the original when its
-    result would be bigger, so a bigger output is worth knowing about.
+    Pictures are checked by rendering a bounded sample of pages from both files and
+    comparing them: reading every image object out of a PDF and matching it to its
+    counterpart is unreliable (renumbering, object reuse), while "the page still
+    looks the same" is exactly what the user gets. The sample is evenly spaced and
+    capped at 8 pages so a 120-page benchmark stays affordable; the docstring says
+    sample, not every page, because that is what the check does.
     """
     issues = []
     outputs = [path for path in deliverables(out_dir) if path.suffix.lower() == ".pdf"]
@@ -436,6 +444,12 @@ def check_pdf_compress(source_pdf, out_dir) -> list:
         if _normalise(before) != _normalise(after):
             issues.append("page %d: text layer changed or was dropped" % index)
             break
+    wanted = list(range(0, len(source_pages), max(1, len(source_pages) // sample)))[:sample]
+    for (number, left), (_, right) in zip(iter_pdf_pages(source_pdf, 72, wanted),
+                                          iter_pdf_pages(outputs[0], 72, wanted)):
+        issues += compare_pil(left, right, "page %d rendered at 72 dpi" % number)
+        left.close()
+        right.close()
     return issues
 
 
