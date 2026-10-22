@@ -415,6 +415,44 @@ def _page_cache_reuse(cache,page,ext,cfg,dest):
         except OSError:pass
         return False
 
+class _EncodeGate:
+    """Every page encode passes through here, so render() can stop them all.
+
+    shutdown(wait=True) only joins the threads the pool knows about, and that is
+    not every thread that can write a page: submit() queues the page, then starts
+    a thread and waits for it to boot. When the cancel handler raises inside that
+    wait, the new thread is already running but never reaches the pool's thread
+    set. It then takes the queued page and writes it while _run_staging() removes
+    the folder, which left ".Chamo暂存/<job>/<name>_page00041.jpeg" behind on CI.
+
+    The gate does not depend on knowing the threads: close() turns every encode
+    that has not started into a no-op and waits for the ones already running.
+    tests/test_cancel_encode_race.py lands the cancel exactly in that window.
+    """
+    def __init__(self):
+        self.cond=threading.Condition();self.closed=False;self.active=0
+    def run(self,fn,*args):
+        with self.cond:
+            if self.closed:return None
+            self.active+=1
+        try:return fn(*args)
+        finally:
+            with self.cond:
+                self.active-=1;self.cond.notify_all()
+    def close(self):
+        # A second cancel can interrupt the wait; keep waiting, then raise it, so
+        # render() never returns while an encode can still write into staging.
+        interrupted=None
+        while True:
+            try:
+                with self.cond:
+                    self.closed=True
+                    while self.active:self.cond.wait()
+                break
+            except BaseException as error:
+                interrupted=interrupted or error
+        if interrupted is not None:raise interrupted
+
 def render(path, work, cfg, stem, selected=None, cache=None):
     """Render the selected pages into work, reusing verified cache pages.
 
@@ -438,7 +476,7 @@ def render(path, work, cfg, stem, selected=None, cache=None):
     # difference between a ~1 s cancel and a 30 s timeout. Only the encodes already
     # running are waited for, so no thread can write into the staging folder while
     # the cancelled job is rolled back.
-    pool=concurrent.futures.ThreadPoolExecutor(max_workers=THREADS)
+    pool=concurrent.futures.ThreadPoolExecutor(max_workers=THREADS);gate=_EncodeGate()
     try:
       with pdfium.PdfDocument(str(path)) as doc:
         pending=[];budget=512_000_000;used=0
@@ -471,9 +509,9 @@ def render(path, work, cfg, stem, selected=None, cache=None):
             while pending and (used+cost>budget or len(pending)>=THREADS*2):
                 used-=settle(pending.pop(0));finished+=1;report_progress(finished,len(selected))
             if cache and cache.get('usable'):
-                pending.append((pool.submit(save_page_cached,im,dest,ext,cfg,cache,n+1),cost,True))
+                pending.append((pool.submit(gate.run,save_page_cached,im,dest,ext,cfg,cache,n+1),cost,True))
             else:
-                pending.append((pool.submit(save_page,im,dest,ext,cfg),cost,False))
+                pending.append((pool.submit(gate.run,save_page,im,dest,ext,cfg),cost,False))
             if cache is not None:cache['rendered']=cache.get('rendered',0)+1
             used+=cost
         for item in pending:
@@ -486,7 +524,10 @@ def render(path, work, cfg, stem, selected=None, cache=None):
         # removed, and leaving a writer behind is exactly the residue the cancel
         # contract forbids. shutdown(cancel_futures=True) does both, and on a
         # normal run the queue is already empty, so it changes nothing there.
-        pool.shutdown(wait=True,cancel_futures=True)
+        # The gate covers the one writer shutdown() cannot see (see _EncodeGate);
+        # it closes first, so a page taken from the queue after this is dropped.
+        try:gate.close()
+        finally:pool.shutdown(wait=True,cancel_futures=True)
     if cache is not None:
         stats['reused']=cache.get('reused',0)
         stats['rendered']=cache.get('rendered',0)
