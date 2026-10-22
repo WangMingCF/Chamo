@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -71,3 +72,55 @@ def test_a_real_failure_is_still_a_failure(tmp_path, monkeypatch):
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert result["state"] == "failed", result
     assert "引擎内部错误" in result["error"]
+
+
+class _SupervisorStandIn:
+    """Just enough of Supervisor for finish(): the downgrade path needs no worker."""
+
+    def __init__(self, output: Path, cancelled: bool):
+        import threading
+
+        self.lock = threading.RLock()
+        self.results = []
+        self.done = 0
+        self.total = 1
+        self.cancelled = cancelled
+        self.req = {"output": str(output)}
+        self.started_wall = time.time()
+        self.last_progress = 0.0
+
+
+def test_a_worker_killed_for_another_reason_is_a_failure(tmp_path, monkeypatch):
+    """Timeout, a full disk and a crash end in the same terminate handler.
+
+    Only a run the user actually stopped may be reported as cancelled; otherwise
+    the failure count would silently drop a real fault and the user would be told
+    they pressed stop.
+    """
+    monkeypatch.setattr(workbench, "event", lambda *args, **kwargs: None)
+    record = tmp_path / "record"
+    record.mkdir()
+    stand_in = _SupervisorStandIn(tmp_path / "out", cancelled=False)
+    entry = {"index": 0, "job": {"sources": [str(tmp_path / "a.pdf")],
+                                 "output": str(tmp_path / "out")}}
+    result = {"state": "cancelled", "error": CANCEL, "sources": [], "outputs": []}
+
+    workbench.Supervisor.finish(stand_in, entry, result, record)
+
+    assert result["state"] == "failed", result
+    assert "不是用户取消" in result["error"]
+
+
+def test_a_user_cancel_stays_cancelled(tmp_path, monkeypatch):
+    monkeypatch.setattr(workbench, "event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workbench, "_committed_record", lambda *a, **k: None)
+    record = tmp_path / "record"
+    record.mkdir()
+    stand_in = _SupervisorStandIn(tmp_path / "out", cancelled=True)
+    entry = {"index": 0, "job": {"sources": [str(tmp_path / "a.pdf")],
+                                 "output": str(tmp_path / "out")}}
+    result = {"state": "cancelled", "error": CANCEL, "sources": [], "outputs": []}
+
+    workbench.Supervisor.finish(stand_in, entry, result, record)
+
+    assert result["state"] == "cancelled", result

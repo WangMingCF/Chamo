@@ -2075,15 +2075,28 @@ class Supervisor:
                 self.finish(e,{'state':'cancelled' if self.cancelled else 'failed','error':'任务取消、超时或工作进程退出；原件保留','sources':e['job']['sources'],'outputs':[]},record)
     def finish(self,entry,result,record):
         index=entry['index'];source=entry['job']['sources'][0]
+        if result.get('state')=='cancelled' and not self.cancelled:
+            # The terminate handlers fire for every forced stop, not only for a
+            # user cancel: a timeout, a full disk or a crashing worker lands in the
+            # same place. Labelling those "cancelled" would tell the user they
+            # pressed stop while a real fault is being hidden, and the failure
+            # count would silently drop it. Only a run the user actually stopped
+            # keeps the cancelled state.
+            result['state']='failed'
+            result['error']=(result.get('error') or '')+'；工作进程被终止（超时、磁盘空间或异常退出），不是用户取消'
         if result.get('state')=='cancelled':
             # A worker can commit its product and be cancelled a moment later; a
             # cancelled run leaves nothing behind, so withdraw what it published
-            # (the same cleanup the never-reported path does).
+            # (the same cleanup the never-reported path does). A failure here means
+            # the product may still be on disk, so it is recorded instead of being
+            # swallowed: the promise "a cancelled run leaves nothing" must not fail
+            # silently.
             try:
                 committed=_committed_record(entry['job'],Path(self.req['output']).resolve(),self.req,newer_than=self.started_wall)
                 if committed:_withdraw_product(committed,Path(self.req['output']).resolve(),self.req)
-            except Exception:
-                pass
+            except Exception as error:
+                result['withdraw_failed']=True
+                result['error']=(result.get('error') or '')+'；撤回已发布成品失败：%s: %s' % (type(error).__name__,error)
         with self.lock:
             self.results.append(result);self.done+=1
             shown={'index':index,'source':source,'state':result['state'],'detail':result.get('error',''),'done':self.done,'total':self.total,'outputs':len(result.get('outputs',[])),'output_bytes':sum(x.get('bytes',0) for x in result.get('outputs',[])),'output_paths':[x['path'] for x in result.get('outputs',[])]}
@@ -2184,9 +2197,9 @@ class Supervisor:
             with platform_text.open_text(record/'upload-manifest.jsonl','w') as f:
                 for x in outputs:f.write(json.dumps(x,ensure_ascii=False)+'\n')
             for i in range(0,len(outputs),cfg['batch_files']):atomic_json(record/f'batch-{i//cfg["batch_files"]+1:04d}.json',outputs[i:i+cfg['batch_files']])
-            summary={'state':'cancelled' if cancelled_now or any(r['state']=='cancelled' for r in self.results) else 'complete_with_exceptions' if any(r['state']=='failed' for r in self.results) else 'complete','success':sum(r['state'] in ('complete','resumed') for r in self.results),'failed':sum(r['state']=='failed' for r in self.results),'cancelled':sum(r['state']=='cancelled' for r in self.results),'total':self.total,'outputs':len(outputs),'seconds':round(time.monotonic()-self.started,2),'report':str(record),'results':self.results}
+            summary={'state':'cancelled' if cancelled_now else 'complete_with_exceptions' if any(r['state']=='failed' for r in self.results) else 'complete','success':sum(r['state'] in ('complete','resumed') for r in self.results),'failed':sum(r['state']=='failed' for r in self.results),'cancelled':sum(r['state']=='cancelled' for r in self.results),'total':self.total,'outputs':len(outputs),'seconds':round(time.monotonic()-self.started,2),'report':str(record),'results':self.results}
             atomic_json(record/'report.json',summary)
-            lines=['Chamo 处理报告',f'成功 {summary["success"]} / 异常 {summary["failed"]} / 输入任务 {self.total} / 成品 {len(outputs)}',f'排除音视频 {excluded}；跳过不适用文件 {skipped}；用时 {summary["seconds"]} 秒',f'状态：{summary["state"]}','原件保留在原位置。upload-manifest.jsonl 为成功输出清单；batch-*.json 为上传批次索引。','保真标记：verified_content 内容校验；rendered_static 静态渲染；derived_export 派生导出；lossy_user_selected 主动选择质量损失。','']
+            lines=['Chamo 处理报告',f'成功 {summary["success"]} / 异常 {summary["failed"]} / 已取消 {summary["cancelled"]} / 输入任务 {self.total} / 成品 {len(outputs)}',f'排除音视频 {excluded}；跳过不适用文件 {skipped}；用时 {summary["seconds"]} 秒',f'状态：{summary["state"]}','原件保留在原位置。upload-manifest.jsonl 为成功输出清单；batch-*.json 为上传批次索引。','保真标记：verified_content 内容校验；rendered_static 静态渲染；derived_export 派生导出；lossy_user_selected 主动选择质量损失。','']
             for r in self.results:
                 if r['state'] not in ('complete','resumed'):lines.extend(['异常：'+ '；'.join(r['sources']),r.get('error','未完成'),''])
                 elif r.get('compress'):
