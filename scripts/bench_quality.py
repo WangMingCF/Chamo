@@ -199,14 +199,26 @@ def compare_pil(reference, candidate, label: str = "image") -> list:
     return []
 
 
+def compare_with_file(reference, candidate, label: str = "image") -> list:
+    """Compare an open image with a file on disk: the usual case, a source page
+    rendered in memory against the page the engine wrote."""
+    from PIL import Image
+
+    try:
+        with Image.open(candidate) as cand_image:
+            return compare_pil(reference, cand_image, label)
+    except OSError as error:
+        return ["%s: cannot decode %s (%s)" % (label, candidate, error)]
+
+
 def compare_images(reference, candidate, label: str = "image") -> list:
     from PIL import Image
 
     try:
-        with Image.open(reference) as ref_image, Image.open(candidate) as cand_image:
-            return compare_pil(ref_image, cand_image, label)
+        with Image.open(reference) as ref_image:
+            return compare_with_file(ref_image, candidate, label)
     except OSError as error:
-        return ["%s: cannot decode %s (%s)" % (label, candidate, error)]
+        return ["%s: cannot decode %s (%s)" % (label, reference, error)]
 
 
 # --------------------------------------------------------------------------
@@ -288,7 +300,7 @@ def check_pdf_images(source_pdf, out_dir, dpi: int) -> list:
         if candidate is None:
             image.close()
             continue
-        issues += compare_pil(image, candidate, "page %d" % number)
+        issues += compare_with_file(image, candidate, "page %d" % number)
         image.close()
         if len(issues) > 12:
             issues.append("... further differences suppressed")
