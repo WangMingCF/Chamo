@@ -92,10 +92,10 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 
 现有测试里有两个在 main 上间歇失败，与本方案无关，但会让门禁偶尔变红。修复前不得用重试或跳过掩盖：
 
-| 测试 | 平台 | 现象 |
-| --- | --- | --- |
-| `tests/test_page_resume.py::test_cancelled_then_resumed_outputs_match_a_clean_run` | macOS | 取消后输出目录里残留 `.Chamo暂存/<任务>/…_page00041.jpeg`，违反"取消后输出目录保持原样"的约定（疑似取消与页写入的竞态） |
-| `tests/test_shard_equivalence.py::test_content_text_is_not_sharded_and_not_slower` | Windows | `content.text.timing` 断言失败；共享 runner 上的计时噪声可能导致误判，需要先确认是测试口径问题还是真的变慢 |
+| 测试 | 平台 | 现象 | 原因与处理 |
+| --- | --- | --- | --- |
+| `tests/test_page_resume.py::test_cancelled_then_resumed_outputs_match_a_clean_run` | macOS | 取消后输出目录里残留 `.Chamo暂存/<任务>/…_page00041.jpeg`，违反"取消后输出目录保持原样"的约定 | 引擎竞态：线程池在 `submit()` 里按需启动线程，取消异常落在启动等待里时，新线程不在池的线程集合中，`shutdown(wait=True)` 不等它，它在暂存目录被删时写入一页。引擎改为所有页面编码经过一道“门”，`render()` 退出前关门并等正在写的页完成；新增确定性回归测试 `tests/test_cancel_encode_race.py`。PR #2；macos-latest 重复 20/20 通过 |
+| `tests/test_shard_equivalence.py::test_content_text_is_not_sharded_and_not_slower` | Windows | `content.text.timing` 断言失败 | 计时噪声，不是变慢：文本 PDF 上 auto 只多约 2 ms 的内容判定；windows-latest 上同一代码 36 对实测，单对比值 0.95–1.16。Windows 拿不到子进程 CPU 时间，墙钟改按“每臂最快一次”判定，预算仍为 5%，超预算时补测到最多 6 对再下结论，去掉“无法判定”跳过。PR #3；windows-latest 重复 10/10 通过 |
 
 ## 9. 纪律
 
