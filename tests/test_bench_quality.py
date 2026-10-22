@@ -305,3 +305,30 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
     assert quality.check_image_pairs([(source, mild)], mode="lossy") == []
     issues = quality.check_image_pairs([(source, changed)], mode="lossy")
     assert any("differs too much" in issue for issue in issues), issues
+
+
+def test_a_third_name_collision_is_still_found(tmp_path):
+    """The engine numbers collisions " (2)", " (3)" ...; only " (2)" was matched."""
+    from PIL import Image
+
+    source = tmp_path / "photo.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(source)
+    out = tmp_path / "out"
+    out.mkdir()
+    for name in ("photo.png", "photo (2).png", "photo (3).png"):
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(out / name)
+    issues = quality.check_image_set([source], out)
+    assert any("expected one output, found 3" in issue for issue in issues), issues
+
+
+def test_the_same_name_twice_in_the_export_is_reported(tmp_path):
+    """Two subfolders can hold a.pdf; the hash gate cannot know which one counts."""
+    out = tmp_path / "out"
+    (out / "a").mkdir(parents=True)
+    (out / "b").mkdir()
+    (out / "a" / "a.pdf").write_bytes(b"one")
+    (out / "b" / "a.pdf").write_bytes(b"two")
+    source = tmp_path / "a.pdf"
+    source.write_bytes(b"one")
+    issues = quality.check_rag([source], out)
+    assert any("more than once" in issue for issue in issues), issues
