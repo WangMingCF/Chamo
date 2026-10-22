@@ -350,15 +350,27 @@ class Conversion:
             elif kind == "item":
                 total = event.get("total", total)
                 done = event.get("done", done)
+                # Cancelling is not a failure: the file that was in flight is shown
+                # as 已取消, never as 失败 (the engine reports it as cancelled).
+                item_state = {"complete": "完成", "resumed": "复用", "failed": "失败",
+                              "cancelled": "已取消"}.get(event.get("state"),
+                                                        event.get("state", ""))
                 lines.append("[%s/%s] %s %s %s" % (event.get("done"), event.get("total", "?"),
-                                                  event.get("source", ""), event.get("state", ""),
+                                                  event.get("source", ""), item_state,
                                                   event.get("detail", "")))
             elif kind == "progress":
                 lines.append("%s %s/%s" % (event.get("state", "进度"), event.get("done"), event.get("total")))
             elif kind == "control":
                 lines.append("控制：%s %s" % (event.get("state", ""), event.get("detail", "")))
             elif kind == "finished":
-                lines.append("完成：成功 %s / 异常 %s / 成品 %s" % (event.get("success"), event.get("failed"), event.get("outputs")))
+                if event.get("state") == "cancelled":
+                    # Not a completion either: the run was stopped on purpose and
+                    # whatever had already finished is kept. The cancelled file is
+                    # not an exception, so it is not counted as one.
+                    lines.append("已取消：完成 %s / 成品 %s（被取消的文件不计入异常）"
+                                 % (event.get("success", 0), event.get("outputs", 0)))
+                else:
+                    lines.append("完成：成功 %s / 异常 %s / 成品 %s" % (event.get("success"), event.get("failed"), event.get("outputs")))
                 lines.append("记录：%s" % event.get("report", ""))
             elif kind == "fatal":
                 lines.append("失败：%s" % event.get("detail", ""))
