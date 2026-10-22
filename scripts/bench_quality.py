@@ -55,7 +55,7 @@ PAGE_FILE = re.compile(r"_(?:page)?(\d+)\.(png|jpe?g|webp|tiff?|bmp)$", re.I)
 # the worst 1/16x1/16 block is checked as well.
 MEAN_ABS_MAX = 1.0        # full-resolution mean of |delta|, in grey levels
 BLOCK_MEAN_MAX = 8.0      # worst block mean of |delta|, in grey levels
-SSIM_MIN = 0.995          # kept for the lossy comparison and for reporting
+LOSSY_SSIM_MIN = 0.90     # the bar a user-selected quality loss has to clear
 
 
 def sha256_file(path: Path) -> str:
@@ -85,14 +85,14 @@ def deliverables(out_dir) -> list:
     return files
 
 
-def page_map(out_dir) -> dict:
-    """{page number: path} from the engine's <stem>_page00001.png names."""
-    pages = {}
+def page_entries(out_dir) -> list:
+    """[(page number, path)] from the engine's <stem>_00001.png names, in file order."""
+    entries = []
     for path in deliverables(out_dir):
         match = PAGE_FILE.search(path.name)
         if match:
-            pages[int(match.group(1))] = path
-    return pages
+            entries.append((int(match.group(1)), path))
+    return entries
 
 
 # --------------------------------------------------------------------------
@@ -278,19 +278,30 @@ def _normalise(text: str) -> str:
 # Per-operation checks
 # --------------------------------------------------------------------------
 def check_pdf_images(source_pdf, out_dir, dpi: int) -> list:
-    """Every selected page is present, once, and shows the source page.
+    """Every page of the source is present, once, and shows that page.
 
-    A missing page, a page rendered at a different DPI, a duplicated page and a
-    page belonging to another document all fail here.
+    The benchmark converts whole documents, so "selected" is the whole source;
+    a run that exports a page range needs a different contract, not a quieter
+    check. A missing page, a page rendered at a different DPI, a page that appears
+    twice (two subfolders can both hold a _0001.png) and a page belonging to
+    another document all fail here.
     """
-    found = page_map(out_dir)
-    if not found:
+    entries = page_entries(out_dir)
+    if not entries:
         return ["no page files in %s" % out_dir]
+    found = {}
+    for number, path in entries:
+        found.setdefault(number, path)
+    numbers = [number for number, _ in entries]
+    duplicates = sorted({number for number in numbers if numbers.count(number) > 1})
+    issues = []
+    if duplicates:
+        issues.append("%d page number(s) appear more than once: %s"
+                      % (len(duplicates), duplicates[:8]))
     try:
         total = pdf_page_count(source_pdf)
     except Exception as error:                              # noqa: BLE001 - report it
         return ["cannot read the source PDF %s (%s)" % (source_pdf, error)]
-    issues = []
     expected = set(range(1, total + 1))
     missing = sorted(expected - set(found))
     unexpected = sorted(set(found) - expected)
@@ -342,10 +353,11 @@ def check_image_pairs(pairs, mode: str = "lossless") -> list:
             with Image.open(source) as left, Image.open(output) as right:
                 if mode == "lossy":
                     score = ssim(left, right)
-                    if score < 0.90:
+                    if score < LOSSY_SSIM_MIN:
                         issues.append("%s: lossy result differs too much "
-                                      "(SSIM %.4f < 0.90, PSNR %.1f dB)"
-                                      % (source.name, score, psnr(left, right)))
+                                      "(SSIM %.4f < %.2f, PSNR %.1f dB on the "
+                                      "downscaled grey comparison)"
+                                      % (source.name, score, LOSSY_SSIM_MIN, psnr(left, right)))
                     continue
                 if mode == "convert":
                     if left.convert("RGBA").tobytes() != right.convert("RGBA").tobytes():
@@ -394,11 +406,26 @@ def check_image_set(sources, out_dir, mode: str = "lossless") -> list:
     return check_image_pairs(pairs, mode)
 
 
+def _part_order(path: Path):
+    """Sort split parts by the first number in the name, numerically.
+
+    Plain string order puts part_10 before part_2, which would make a correct
+    10-part split compare every page against the wrong part and report a failure
+    that is not there. A part without a number sorts after the numbered ones and
+    keeps a stable order between runs.
+    """
+    numbers = re.findall(r"\d+", path.stem)
+    return (0, int(numbers[0]), path.name) if numbers else (1, 0, path.name)
+
+
 def check_pdf_split(source_pdf, out_dir) -> list:
     """The parts are the source, page for page, in order."""
     issues = []
-    source_pages = pdf_text_pages(source_pdf)
-    parts = sorted(deliverables(out_dir), key=lambda path: path.name)
+    try:
+        source_pages = pdf_text_pages(source_pdf)
+    except Exception as error:                          # noqa: BLE001 - report it
+        return ["source PDF cannot be read: %s" % error]
+    parts = sorted(deliverables(out_dir), key=_part_order)
     if not parts:
         return ["no split output in %s" % out_dir]
     joined = []
@@ -433,7 +460,10 @@ def check_pdf_compress(source_pdf, out_dir, sample: int = 8) -> list:
     outputs = [path for path in deliverables(out_dir) if path.suffix.lower() == ".pdf"]
     if len(outputs) != 1:
         return ["expected one compressed PDF, found %d" % len(outputs)]
-    source_pages = pdf_text_pages(source_pdf)
+    try:
+        source_pages = pdf_text_pages(source_pdf)
+    except Exception as error:                          # noqa: BLE001
+        return ["source PDF cannot be read: %s" % error]
     try:
         result_pages = pdf_text_pages(outputs[0])
     except Exception as error:                          # noqa: BLE001
@@ -444,36 +474,65 @@ def check_pdf_compress(source_pdf, out_dir, sample: int = 8) -> list:
         if _normalise(before) != _normalise(after):
             issues.append("page %d: text layer changed or was dropped" % index)
             break
-    wanted = list(range(0, len(source_pages), max(1, len(source_pages) // sample)))[:sample]
-    for (number, left), (_, right) in zip(iter_pdf_pages(source_pdf, 72, wanted),
-                                          iter_pdf_pages(outputs[0], 72, wanted)):
-        issues += compare_pil(left, right, "page %d rendered at 72 dpi" % number)
-        left.close()
-        right.close()
+    # Only pages both files have: a result that lost pages is already an issue, and
+    # indexing the shorter document would raise IndexError instead of reporting
+    # the very failure this check exists for.
+    limit = min(len(source_pages), len(result_pages))
+    if limit:
+        wanted = list(range(0, limit, max(1, limit // sample)))[:sample]
+        try:
+            for (number, left), (_, right) in zip(iter_pdf_pages(source_pdf, 72, wanted),
+                                                  iter_pdf_pages(outputs[0], 72, wanted)):
+                issues += compare_pil(left, right, "page %d rendered at 72 dpi" % number)
+                left.close()
+                right.close()
+        except Exception as error:                      # noqa: BLE001 - report it
+            issues.append("pages could not be compared: %s" % error)
     return issues
 
 
-def compressed_growth(source_pdf, out_dir) -> float:
-    """Output bytes / source bytes. Reported, not failed: whether a lossless
-    cleanup helps depends on the document, and the benchmark's job is to show the
-    number, not to declare every growth a defect."""
+def compressed_growth(source_pdf, out_dir):
+    """Output bytes / source bytes, or None when there is no single result.
+
+    Reported, not failed: whether a lossless cleanup helps depends on the
+    document, and the benchmark's job is to show the number, not to declare every
+    growth a defect. None rather than 0.0, because a caller printing the value
+    would read 0.0 as "the result is zero bytes", which is a wrong answer to
+    "how big is it".
+    """
     outputs = [path for path in deliverables(out_dir) if path.suffix.lower() == ".pdf"]
     if len(outputs) != 1:
-        return 0.0
+        return None
     source_bytes = Path(source_pdf).stat().st_size
     return round(outputs[0].stat().st_size / float(source_bytes or 1), 4)
 
 
 def check_rag(sources, out_dir) -> list:
-    """The strict RAG export is the source itself; hashes must agree."""
+    """The strict RAG export is the source itself; hashes must agree.
+
+    "The source itself" cuts both ways: a file in the export that the source does
+    not have is a change of what the user gets, so it is reported too.
+    """
     issues = []
-    by_name = {path.name: path for path in deliverables(out_dir)}
+    files = deliverables(out_dir)
+    by_name = {path.name: path for path in files}
+    expected = {Path(source).name for source in sources}
     for source in sources:
         source = Path(source)
         candidate = by_name.get(source.name)
         if candidate is None:
             issues.append("%s: not in the strict export" % source.name)
-        elif sha256_file(candidate) != sha256_file(source):
+            continue
+        try:
+            same = sha256_file(candidate) == sha256_file(source)
+        except OSError as error:
+            issues.append("%s: cannot hash (%s)" % (source.name, error))
+            continue
+        if not same:
             issues.append("%s: exported bytes differ from the source" % source.name)
+    extra = sorted(name for name in by_name if name not in expected)
+    if extra:
+        issues.append("%d file(s) in the export that the source does not have: %s"
+                      % (len(extra), extra[:8]))
     return issues
 
