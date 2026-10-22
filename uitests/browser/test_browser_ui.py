@@ -172,6 +172,30 @@ def test_a_broken_file_fails_alone(page, work):
     assert sha(bad) == before
 
 
+def test_cancelling_shows_cancelled_not_failed(page, work):
+    """Stopping a run is not an error: the page must say 已取消, not 失败.
+
+    A 300-page PDF at 200 dpi takes long enough that the cancel lands while a file
+    is being worked on, which is exactly the case that used to show up as a red
+    failure in both the window and this page.
+    """
+    pdf = make_pdf(work / "in" / "长文档.pdf", 300)
+    before = sha(pdf)
+    add_files(page, work / "in", ["长文档.pdf"])
+    page.fill("#dpi", "200")
+    page.select_option("#format", "png")
+    page.fill("#output", str(work / "out"))
+    page.click("#start")
+    page.wait_for_timeout(2000)
+    page.click("#cancel")
+    expect(page.locator("#status")).to_contain_text("已取消", timeout=180_000)
+    status = page.locator("#status").inner_text()
+    assert "失败" not in status and "异常 1" not in status, status
+    leftovers = sorted(str(p.relative_to(work / "out")) for p in (work / "out").rglob("*"))
+    assert leftovers == [], f"a cancelled run left files in the output folder: {leftovers}"
+    assert sha(pdf) == before, "the original PDF changed"
+
+
 def test_lossless_image_compression_keeps_every_pixel(page, work):
     src = work / "in" / "图.png"
     Image.new("RGB", (300, 200), (30, 120, 200)).save(src, compress_level=0)
