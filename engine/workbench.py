@@ -2083,7 +2083,9 @@ class Supervisor:
             # count would silently drop it. Only a run the user actually stopped
             # keeps the cancelled state.
             result['state']='failed'
-            result['error']=(result.get('error') or '')+'；工作进程被终止（超时、磁盘空间或异常退出），不是用户取消'
+            # Replace the text rather than append to it: "任务已取消……；不是用户取消"
+            # reads like a contradiction.
+            result['error']='工作进程被终止（超时、磁盘空间不足或异常退出），不是用户取消；原件保留'
         if result.get('state')=='cancelled':
             # A worker can commit its product and be cancelled a moment later; a
             # cancelled run leaves nothing behind, so withdraw what it published
@@ -2254,7 +2256,11 @@ def main():
         # from a crash and fails the whole job, so never leave without writing one.
         result_path=spec_path.with_name(spec_path.stem+'.result.json')
         def shard_interrupted():
-            raise RunCancelled('任务已取消，原件保留，可重新核验并恢复')
+            # Deliberately NOT RunCancelled: the parent process's handling of a
+            # shard result has not been verified, and a worker must not write a
+            # state its consumer was never taught to read. The sharded path still
+            # reports failed on cancel - tracked as follow-up work, not claimed.
+            raise RuntimeError('任务已取消，原件保留，可重新核验并恢复')
         platform_process.on_terminate(shard_interrupted)
         try:
             # The parent has just written this file. On Windows an antivirus scan can

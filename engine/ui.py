@@ -367,8 +367,12 @@ class Conversion:
                     # Not a completion either: the run was stopped on purpose and
                     # whatever had already finished is kept. The cancelled file is
                     # not an exception, so it is not counted as one.
-                    lines.append("已取消：完成 %s / 成品 %s（被取消的文件不计入异常）"
-                                 % (event.get("success", 0), event.get("outputs", 0)))
+                    # A run can be stopped after some files really failed; hiding
+                    # that count here would make the summary disagree with the
+                    # report file and with the filter bar.
+                    lines.append("已取消：完成 %s / 异常 %s / 成品 %s（被取消的文件不计入异常）"
+                                 % (event.get("success", 0), event.get("failed", 0) or 0,
+                                    event.get("outputs", 0)))
                 else:
                     lines.append("完成：成功 %s / 异常 %s / 成品 %s" % (event.get("success"), event.get("failed"), event.get("outputs")))
                 lines.append("记录：%s" % event.get("report", ""))

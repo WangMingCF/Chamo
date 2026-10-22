@@ -350,7 +350,8 @@ def main(argv=None) -> int:
             return EXIT_USAGE
         return EXIT_INTERNAL
     if not args.json and not args.quiet:
-        print(f"\n成功 {final.get('success')} / 异常 {final.get('failed')} / 成品 {final.get('outputs')}"
+        print(f"\n成功 {final.get('success')} / 异常 {final.get('failed')}"
+              f" / 已取消 {final.get('cancelled', 0)} / 成品 {final.get('outputs')}"
               f"，用时 {final.get('seconds')} 秒")
         print(f"报告：{final.get('report')}")
     if final.get("state") == "cancelled":

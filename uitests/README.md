@@ -27,4 +27,3 @@ python -m pytest uitests/browser -q
 - macOS 进程内截图（`cacheDisplay`）在本机 Mac 上可能画不出使用系统毛玻璃材质的侧栏和工具栏，GitHub 的 macOS runner 上则能正常画出；基准截图一律以 runner 为准。"已添加"这类提示几秒后才消失，需要比对的截图前要先等它消失。
 - runner 上应用窗口的默认宽度是 1024，PDF 转图片的文件列表在这个宽度下"大小"一列被截断、出现横向滚动条（见基准 `macos/pdf-images-ready.png`）。这是窄窗口下的布局问题，修复后要更新这张基准。
 
-- 取消时正在处理的那个文件，引擎报成 `failed`（说明是"任务已取消，原件保留"），窗口里显示成红色"失败"，而不是"已取消"。数据安全没有问题（输出目录保持原样、原件不变，`test_cancel_leaves_the_output_folder_clean` 守着），只是状态文案不准确。修复时把该用例的状态断言收紧为 `cancelled`。
