@@ -176,6 +176,16 @@ import Quartz
         if let look = s["appearance"] as? String {
             NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua); next(0.8); return
         }
+        // A known content size, because the runner's window is whatever the display
+        // allows: the narrow-window checks are about what the layout does at 1024
+        // points, not about the runner's default.
+        if let size = s["resize"] as? [String: Any],
+           let width = size["width"] as? Double, let height = size["height"] as? Double {
+            if let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first {
+                window.setContentSize(NSSize(width: width, height: height))
+            }
+            next(0.6); return
+        }
         if s["start"] != nil { m.start(); next(0.2); return }
         if s["cancel"] != nil { m.command("cancel"); next(0.2); return }
         if s["retry"] != nil { m.retryFailed(); next(0.2); return }

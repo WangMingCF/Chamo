@@ -162,18 +162,23 @@ struct FileTable: View {
         // Row numbers are looked up once per render, not per cell (large batches stay O(n)).
         let order = m.tool.ordered ? Dictionary(uniqueKeysWithValues: m.items.enumerated().map { ($1.id, $0 + 1) }) : [:]
         return Table(of: QueueItem.self, selection: $m.selection, sortOrder: $sortOrder) {
+            // The window can be as narrow as 1024 points, and at that width the
+            // old ideals (360+72+80+120+200) pushed the last columns past the edge
+            // and produced a horizontal scrollbar. The name column is the only one
+            // that can absorb slack, so it gets the flexible range and the rest
+            // keep their minimums.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
-                .width(min: 220, ideal: 360)
+                .width(min: 180, ideal: 260, max: .infinity)
             TableColumn("页数", value: \.sortPages) { item in
                 Text(pagesText(item)).foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 56, ideal: 72)
+            }.width(min: 48, ideal: 60)
             TableColumn("大小", value: \.size) { item in
                 Text(item.size > 0 ? ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file) : "—").foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 60, ideal: 80)
+            }.width(min: 56, ideal: 72)
             TableColumn("结果", value: \.sortResult) { item in ResultCell(item: item, compare: m.operation.hasPrefix("image_") || m.operation == "pdf_compress") }
-                .width(min: 70, ideal: 120)
+                .width(min: 64, ideal: 96)
             TableColumn("状态") { item in StatusCell(item: item, reason: m.incompatibility(item)) }
-                .width(min: 120, ideal: 200)
+                .width(min: 104, ideal: 160)
         } rows: {
             // Merge tools follow list order, so rows can be dragged into place.
             // Rows carry their id (for merge reordering) and, once converted, the result

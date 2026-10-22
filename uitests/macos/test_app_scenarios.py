@@ -114,6 +114,26 @@ def test_pdf_to_images_end_to_end(work):
     visual.compare(out / "ready.png", "pdf-images-ready")
 
 
+def test_the_narrowest_window_shows_every_column(work):
+    """1024 points is the window minimum, and the GitHub runner's width.
+
+    At that width the "大小" column used to be cut off and a horizontal scrollbar
+    appeared, so the file list could not be read in one glance. The screenshot is
+    the evidence: compared with a baseline, a layout regression becomes a picture
+    difference instead of a report nobody checks.
+    """
+    pdf = make_pdf(work / "in" / "讲义.pdf", 3)
+    out = run(work, "narrow", [
+        {"tool": "pdf_images"}, {"output": str(work / "out")},
+        {"set": {"format": "png", "dpi": 150}},
+        {"add": [str(pdf)]},
+        {"resize": {"width": 1024, "height": 700}},
+        {"sleep": 1}, {"snapshot": "narrow-window"}])
+    shot = out / "narrow-window.png"
+    assert shot.is_file(), "the scenario produced no screenshot"
+    visual.compare(shot, "macos-narrow-window")
+
+
 def test_a_broken_file_fails_alone_and_says_why(work):
     good = make_pdf(work / "in" / "good.pdf", 1)
     bad = work / "in" / "broken.pdf"
