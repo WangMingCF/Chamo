@@ -83,9 +83,9 @@ MANIFEST_NAME = "清单.json"
 
 SPEEDUP_MIN = 1.5            # gate 3: image-dominant PDF must be >= 1.5x faster
 TEXT_REGRESSION_MAX = 0.05   # gate 2: text PDF must not regress by more than 5%
-# Wall-time hosts (no child CPU time) judge the text gate on best-of-N and, while
-# it is over budget, measure more pairs up to this many before deciding.
-TEXT_WALL_MAX_PAIRS = 6
+# The text gate judges best-of-N per arm and, while over budget, measures more
+# pairs up to this many before deciding (see text_timing_verdict).
+TEXT_MAX_PAIRS = 8
 # The engine reports the gain floor it used in the job report; it is part of the
 # advertised contract ("only shard when predicted gain >= 10%"), so a gate pins
 # it. Review showed the constant could drift from 1.10 down to 1.01 while
@@ -1360,49 +1360,29 @@ def gate_decision_model(session: GateSession) -> list:
     return results
 
 
-def text_timing_verdict(ratios):
-    """Decide the text-PDF timing gate from child CPU seconds (median of pair ratios).
-
-    Child CPU time is not inflated by neighbours, so it keeps the plain 5% bar: a
-    larger measured difference FAILS. A host-limited CPU observation is reported
-    as a failure and re-measured on a quiet machine; it is not reclassified into a
-    skip, because that would trade an acceptance requirement for a green build.
-    Hosts without child CPU time are judged by text_wall_verdict().
-    """
-    if not ratios:
-        return {"status": "FAIL", "noise": 0.0, "ratio": 0.0, "regression": 0.0,
-                "allowed": TEXT_REGRESSION_MAX,
-                "inconclusive": "no valid text timing pair was measured"}
-    ratio = statistics.median(ratios)
-    regression = 1.0 - ratio
-    # Half the spread of the per-pair ratios is this host's demonstrated repeatability.
-    noise = ((max(ratios) - min(ratios)) / 2.0 / ratio
-             if len(ratios) > 1 and ratio else 0.0)
-    status = "FAIL" if regression > TEXT_REGRESSION_MAX else "PASS"
-    return {"status": status, "noise": noise, "ratio": ratio,
-            "regression": regression, "allowed": TEXT_REGRESSION_MAX,
-            "inconclusive": None}
-
-
-def text_wall_verdict(off_walls, auto_walls):
-    """Decide the text-PDF timing gate from wall times: best-of-N per arm, 5% bar.
+def text_timing_verdict(off_times, auto_times):
+    """Decide the text-PDF timing gate: best-of-N per arm against the 5% budget.
 
     The two arms do the same work except the content sample (a few ms on a text
-    PDF), so on a shared runner the per-pair ratio mostly measures neighbours.
-    windows-latest, 36 interleaved pairs of identical code: single pairs ranged
-    0.95-1.16 and a median of 3 pairs reached a 4.1% "regression" (one main
-    build failed at 8.7%), while best-of-3 stayed inside 0.986-1.016.
-    Interference only ever adds time, so each arm's fastest run is the tightest
-    bound on its own cost: a real slowdown is in every auto run, including the
-    fastest one, and still fails the same 5% budget.
+    PDF), so on a shared runner the difference between two runs mostly measures
+    the neighbours, on either clock:
+      * wall time, windows-latest: identical runs took 5.0-13.3 s; a median of
+        3 pairs failed main with an 8.7% "regression" and best-of-6 failed a PR
+        with 5.1%;
+      * child CPU seconds, macos-latest at load average 13: identical runs used
+        7.7-12.4 s, and a median of 3 pairs failed a PR with 6.8%.
+    Contention only ever adds time (wall or CPU: cache and SMT contention,
+    frequency drops and steal inflate CPU seconds too), so each arm's smallest
+    measurement is the tightest bound on its own cost. A real slowdown is in
+    every auto run, including the fastest one, and still FAILS the same 5%.
     """
-    if not off_walls or not auto_walls:
+    if not off_times or not auto_times:
         return {"status": "FAIL", "noise": 0.0, "ratio": 0.0, "regression": 0.0,
                 "allowed": TEXT_REGRESSION_MAX,
                 "inconclusive": "no valid text timing pair was measured"}
-    ratio = min(off_walls) / min(auto_walls)
+    ratio = min(off_times) / min(auto_times)
     regression = 1.0 - ratio
-    pair_ratios = [off / auto for off, auto in zip(off_walls, auto_walls) if auto]
+    pair_ratios = [off / auto for off, auto in zip(off_times, auto_times) if auto]
     median = statistics.median(pair_ratios) if pair_ratios else ratio
     noise = ((max(pair_ratios) - min(pair_ratios)) / 2.0 / median
              if len(pair_ratios) > 1 and median else 0.0)
@@ -1448,17 +1428,13 @@ def gate_content_text(session: GateSession, reps=None) -> list:
     # 2b. Timing: the bounded content sample must cost <5% on a text PDF.
     # Interleaved pairs; see paired_reps().
     #
-    # Which clock: on a shared CI host wall time mostly measures other tenants.
-    # A macOS runner at load average 28 produced per-pair ratios 0.67/0.91/1.07
-    # for two arms that do the same work, i.e. a 9% "regression" out of noise.
-    # Child CPU seconds are not inflated by neighbours, so the gate judges the
-    # median CPU ratio against 5%. Every CI platform reports them: POSIX through
-    # RUSAGE_CHILDREN, Windows through Job Object accounting (start_measured).
-    # Wall time is only a fallback for a host that reports no CPU time: best-of-N
-    # (see text_wall_verdict) against the same 5%, re-measured up to
-    # TEXT_WALL_MAX_PAIRS pairs while over budget. It is not enough on a busy
-    # runner: windows-latest once gave walls of 5.0-13.3 s for identical runs and
-    # a 5.1% best-of-6 "regression", which is why Windows now measures CPU.
+    # Which clock: the engine tree's CPU seconds where the platform reports them
+    # (POSIX through RUSAGE_CHILDREN, Windows through Job Object accounting; see
+    # start_measured), else wall time. Neither is quiet on a shared runner, so
+    # both are judged on best-of-N (see text_timing_verdict). Over budget, the
+    # gate measures more pairs, up to TEXT_MAX_PAIRS, before deciding: a quiet run
+    # can only show up by measuring again, and a real slowdown is in every run, so
+    # it still FAILS. There is no skip.
     count = max(1, int(reps if reps is not None else session.args.reps))
     while True:
         pairs = session.paired_reps("text", count=count)
@@ -1467,17 +1443,14 @@ def gate_content_text(session: GateSession, reps=None) -> list:
         cpu_pairs = [(off_run["cpu"], auto_run["cpu"]) for off_run, auto_run in usable
                      if off_run.get("cpu") and auto_run.get("cpu")]
         use_cpu = bool(usable) and len(cpu_pairs) == len(usable)
-        if use_cpu:
-            ratios = [off_cpu / auto_cpu for off_cpu, auto_cpu in cpu_pairs]
-            verdict = text_timing_verdict(ratios)
-            break
-        timed = [(off_run["wall"], auto_run["wall"]) for off_run, auto_run in usable
-                 if off_run.get("wall") and auto_run.get("wall")]
-        ratios = [off_wall / auto_wall for off_wall, auto_wall in timed]
-        verdict = text_wall_verdict([off_wall for off_wall, _ in timed],
-                                    [auto_wall for _, auto_wall in timed])
+        timed = cpu_pairs if use_cpu else [
+            (off_run["wall"], auto_run["wall"]) for off_run, auto_run in usable
+            if off_run.get("wall") and auto_run.get("wall")]
+        ratios = [off_time / auto_time for off_time, auto_time in timed]
+        verdict = text_timing_verdict([off_time for off_time, _ in timed],
+                                      [auto_time for _, auto_time in timed])
         # A failed or timed-out arm is a failure to report, not noise to re-measure.
-        if verdict["status"] == "PASS" or count >= TEXT_WALL_MAX_PAIRS or len(timed) != len(pairs):
+        if verdict["status"] == "PASS" or count >= TEXT_MAX_PAIRS or len(timed) != len(pairs):
             break
         count += 1
     problems = []
@@ -1487,7 +1460,7 @@ def gate_content_text(session: GateSession, reps=None) -> list:
                 problems.append("text %s timing arm failed: %s"
                                 % (label, describe_fatal(run)))
     metric = "child CPU seconds" if use_cpu else "wall time"
-    estimator = "median of per-pair ratios" if use_cpu else "best-of-N per arm"
+    estimator = "best-of-N per arm"
     ratio, noise = verdict["ratio"], verdict["noise"]
     regression = verdict["regression"]
     if verdict["status"] == "FAIL":
