@@ -398,8 +398,16 @@ def check_image_pairs(pairs, mode: str = "lossless", lossy_target: bool = False)
         try:
             with Image.open(source) as left, Image.open(output) as right:
                 if mode == "lossy":
-                    score = ssim(left, right)
-                    if score < LOSSY_SSIM_MIN:
+                    # Size first: SSIM downscales both images to 64x64, so a result
+                    # cut to half the resolution scores about 1.0 - "smaller by
+                    # throwing pixels away" is exactly the shortcut this gate
+                    # exists to catch, and every other check here tests size first.
+                    if left.size != right.size:
+                        issues.append("%s: size changed %s -> %s (a downscaled result "
+                                      "is smaller and still looks similar)"
+                                      % (source.name, left.size, right.size))
+                        continue
+                    if ssim(left, right) < LOSSY_SSIM_MIN:
                         issues.append("%s: lossy result differs too much "
                                       "(SSIM %.4f < %.2f, PSNR %.1f dB on the "
                                       "downscaled grey comparison)"
@@ -411,6 +419,11 @@ def check_image_pairs(pairs, mode: str = "lossless", lossy_target: bool = False)
                     # suffix's: WebP exists in both forms, and PNG to lossless WebP
                     # must still be pixel-identical or this gate quietly weakens.
                     if lossy_target:
+                        if left.size != right.size:
+                            issues.append("%s: size changed %s -> %s (a downscaled "
+                                          "result is smaller and still looks similar)"
+                                          % (source.name, left.size, right.size))
+                            continue
                         score = ssim(left, right)
                         if score < CONVERT_SSIM_MIN:
                             issues.append("%s: converting to %s changed the picture "
