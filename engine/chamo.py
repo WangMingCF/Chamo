@@ -330,8 +330,9 @@ def main(argv=None) -> int:
                     f"，排除音视频 {event.get('excluded')}" if event.get("excluded") else ""))
             elif kind == "progress":
                 print(f"  进度 {event.get('done')}/{event.get('total')}", end="\r", flush=True)
-            elif kind == "item" and event.get("state") in ("complete", "resumed", "failed"):
-                state = {"complete": "完成", "resumed": "复用", "failed": "失败"}[event["state"]]
+            elif kind == "item" and event.get("state") in ("complete", "resumed", "failed", "cancelled"):
+                state = {"complete": "完成", "resumed": "复用", "failed": "失败",
+                         "cancelled": "已取消"}[event["state"]]
                 detail = event.get("detail") or ""
                 print(f"  {state}  {event.get('source', '')}" + (f"  {detail}" if detail else ""))
         if event.get("type") in ("finished", "fatal"):

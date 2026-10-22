@@ -1935,6 +1935,17 @@ def _withdraw_product(result, out, request=None):
     result['state']='cancelled'
     result['error']='任务已取消；本次已发布的成品已撤回，可重新运行'
 
+class RunCancelled(RuntimeError):
+    """Raised inside a worker when the run was cancelled.
+
+    A cancellation is not a failure: the file keeps its sources, publishes
+    nothing, and it must be reported as cancelled rather than counted as an
+    exception. A plain RuntimeError made the two indistinguishable once the
+    worker had written its result file, which is why the in-flight file used to
+    show up as "failed" in the app and in the browser.
+    """
+
+
 class Supervisor:
     def __init__(self,req):
         self.req=req;self.lock=threading.RLock();self.children={};self.paused=False;self.cancelled=False;self.low=False
@@ -2064,6 +2075,15 @@ class Supervisor:
                 self.finish(e,{'state':'cancelled' if self.cancelled else 'failed','error':'任务取消、超时或工作进程退出；原件保留','sources':e['job']['sources'],'outputs':[]},record)
     def finish(self,entry,result,record):
         index=entry['index'];source=entry['job']['sources'][0]
+        if result.get('state')=='cancelled':
+            # A worker can commit its product and be cancelled a moment later; a
+            # cancelled run leaves nothing behind, so withdraw what it published
+            # (the same cleanup the never-reported path does).
+            try:
+                committed=_committed_record(entry['job'],Path(self.req['output']).resolve(),self.req,newer_than=self.started_wall)
+                if committed:_withdraw_product(committed,Path(self.req['output']).resolve(),self.req)
+            except Exception:
+                pass
         with self.lock:
             self.results.append(result);self.done+=1
             shown={'index':index,'source':source,'state':result['state'],'detail':result.get('error',''),'done':self.done,'total':self.total,'outputs':len(result.get('outputs',[])),'output_bytes':sum(x.get('bytes',0) for x in result.get('outputs',[])),'output_paths':[x['path'] for x in result.get('outputs',[])]}
@@ -2164,7 +2184,7 @@ class Supervisor:
             with platform_text.open_text(record/'upload-manifest.jsonl','w') as f:
                 for x in outputs:f.write(json.dumps(x,ensure_ascii=False)+'\n')
             for i in range(0,len(outputs),cfg['batch_files']):atomic_json(record/f'batch-{i//cfg["batch_files"]+1:04d}.json',outputs[i:i+cfg['batch_files']])
-            summary={'state':'cancelled' if cancelled_now else 'complete_with_exceptions' if any(r['state']=='failed' for r in self.results) else 'complete','success':sum(r['state'] in ('complete','resumed') for r in self.results),'failed':sum(r['state']=='failed' for r in self.results),'total':self.total,'outputs':len(outputs),'seconds':round(time.monotonic()-self.started,2),'report':str(record),'results':self.results}
+            summary={'state':'cancelled' if cancelled_now or any(r['state']=='cancelled' for r in self.results) else 'complete_with_exceptions' if any(r['state']=='failed' for r in self.results) else 'complete','success':sum(r['state'] in ('complete','resumed') for r in self.results),'failed':sum(r['state']=='failed' for r in self.results),'cancelled':sum(r['state']=='cancelled' for r in self.results),'total':self.total,'outputs':len(outputs),'seconds':round(time.monotonic()-self.started,2),'report':str(record),'results':self.results}
             atomic_json(record/'report.json',summary)
             lines=['Chamo 处理报告',f'成功 {summary["success"]} / 异常 {summary["failed"]} / 输入任务 {self.total} / 成品 {len(outputs)}',f'排除音视频 {excluded}；跳过不适用文件 {skipped}；用时 {summary["seconds"]} 秒',f'状态：{summary["state"]}','原件保留在原位置。upload-manifest.jsonl 为成功输出清单；batch-*.json 为上传批次索引。','保真标记：verified_content 内容校验；rendered_static 静态渲染；derived_export 派生导出；lossy_user_selected 主动选择质量损失。','']
             for r in self.results:
@@ -2217,7 +2237,7 @@ def main():
         # from a crash and fails the whole job, so never leave without writing one.
         result_path=spec_path.with_name(spec_path.stem+'.result.json')
         def shard_interrupted():
-            raise RuntimeError('任务已取消，原件保留，可重新核验并恢复')
+            raise RunCancelled('任务已取消，原件保留，可重新核验并恢复')
         platform_process.on_terminate(shard_interrupted)
         try:
             # The parent has just written this file. On Windows an antivirus scan can
@@ -2234,6 +2254,9 @@ def main():
                                cache=page_cache_adopt(spec.get('cache')))
             result={'state':'ok','files':_expected_page_files(spec['stem'],selected,spec['config']),
                     'cache':cache_stats,'seconds':round(time.monotonic()-started,3)}
+        except RunCancelled as error:
+            result={'state':'cancelled','files':[],'error':str(error),
+                    'seconds':round(time.monotonic()-started,3)}
         except Exception as error:
             result={'state':'failed','files':[],'error':f'{type(error).__name__}: {error}',
                     'seconds':round(time.monotonic()-started,3)}
@@ -2245,23 +2268,25 @@ def main():
         cancelled=[]
         def stop():
             cancelled.append(True)
-            raise RuntimeError('任务已取消，原件保留，可重新核验并恢复')
+            raise RunCancelled('任务已取消，原件保留，可重新核验并恢复')
         platform_process.on_terminate(stop)
         chunk=platform_text.read_json(Path(a.chunk));total=len(chunk['entries'])
         for k,entry in enumerate(chunk['entries']):
             if cancelled:break
             job=entry['job']
             try:r=one(job)
+            except RunCancelled as e:r={'state':'cancelled','error':str(e),'sources':job['sources'],'outputs':[]}
             except Exception as e:r={'state':'failed','error':str(e),'sources':job['sources'],'outputs':[]}
             atomic_json(entry['result'],r,durable=False)
             tmp=Path(chunk['progress']+'.tmp');platform_text.write_text(tmp,json.dumps({'done':k+1,'total':total}));os.replace(tmp,chunk['progress'])
         return
     if a.one:
         def interrupted():
-            raise RuntimeError('任务已取消，原件保留，可重新核验并恢复')
+            raise RunCancelled('任务已取消，原件保留，可重新核验并恢复')
         platform_process.on_terminate(interrupted)
         job=platform_text.read_json(Path(a.one))
         try:r=one(job)
+        except RunCancelled as e:r={'state':'cancelled','error':str(e),'sources':job['sources'],'outputs':[]}
         except Exception as e:r={'state':'failed','error':str(e),'sources':job['sources'],'outputs':[]}
         atomic_json(a.result,r,durable=False);return
     try:

@@ -153,12 +153,12 @@ def test_cancel_leaves_the_output_folder_clean(work):
         {"add": [str(pdf)]}, {"start": True}, {"sleep": 1.5}, {"cancel": True},
         {"wait": "finished", "timeout": 120}, {"summary": "done"}])
     items = summary(out, "done")["items"]
-    # Known gap: the engine reports the file that was running as "failed" with a
-    # cancellation detail, so the window shows a red failure instead of "已取消".
-    # The data-safety contract below is what this test guards; the status wording
-    # is tracked separately (uitests/README.md, 已知问题).
-    assert items[0]["status"] in ("cancelled", "failed") and "取消" in items[0]["detail"], (
-        f"the run was not cancelled (it may have finished first): {items}")
+    # Cancelling is not a failure: the file that was in flight must be reported as
+    # cancelled, so the window shows 已取消 and the failure count stays at zero.
+    # (The engine used to write "failed" plus the cancellation text here;
+    # tests/test_cancel_item_state.py locks the mapping that made that happen.)
+    assert items[0]["status"] == "cancelled", (
+        f"the file in flight was not reported as cancelled: {items}")
     leftovers = sorted(str(p.relative_to(work / "out")) for p in (work / "out").rglob("*"))
     assert leftovers == [], f"a cancelled run left files in the output folder: {leftovers}"
     assert sha(pdf) == before
