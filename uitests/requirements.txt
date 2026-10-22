@@ -1,0 +1,3 @@
+# Browser UI tests only (uitests/browser). The engine itself does not need these.
+playwright==1.63.0
+pytest==9.1.1

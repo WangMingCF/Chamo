@@ -323,7 +323,13 @@ enum Phase { case idle, running, finished }
 
     init() {
         githubRepository = UserDefaults.standard.string(forKey: "githubRepository") ?? (Bundle.main.object(forInfoDictionaryKey: "GitHubRepositoryURL") as? String ?? "")
+        #if CHAMO_DEBUG
+        // Automated UI runs keep history and records out of the user's real folder.
+        storage = ProcessInfo.processInfo.environment["CHAMO_APP_SUPPORT"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Chamo")
+        #else
         storage = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Chamo")
+        #endif
         try? FileManager.default.createDirectory(at: storage, withIntermediateDirectories: true)
         if let d = try? Data(contentsOf: storage.appendingPathComponent("history.json")), let h = try? JSONDecoder().decode([History].self, from: d) { histories = h }
         for i in histories.indices where histories[i].status == "运行中" { histories[i].status = "已中断 · 可恢复" }

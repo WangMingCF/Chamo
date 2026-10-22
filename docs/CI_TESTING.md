@@ -24,6 +24,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 | `linux package` | Linux x64 | 构建 `.deb`，安装后用安装出来的 `chamo` 做真实转换 |
 | `windows package` | Windows x64 | 构建便携 zip，解压后转换，并驱动打包后的本机界面 |
 | `swift (macos-15)` | macOS arm64 | 编译 macOS 应用（正式版与 `CHAMO_DEBUG` 版）和 HEIC 辅助程序；运行 Swift 单测（`tests/*Tests.swift`） |
+| `ui (ubuntu-latest / windows-latest / macos-15)` | 三端 | 界面自动化：Playwright 驱动 `chamo ui` 真实页面（三端），macOS 上再用调试钩子剧本驱动原生应用；断言落到输出文件上，固定画面与基准截图比对。约定见 `uitests/README.md` |
 | `ops scripts` | Linux x64 | 自循环工具：隐私扫描、评审 API 客户端测试、shellcheck |
 | `all checks` | Linux x64 | 只有上面每个作业都成功才通过；任何一个被跳过或取消也算失败 |
 
@@ -68,7 +69,8 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 3. **并发、取消与时序**：这类测试先用 `ci_remote_test.sh --repeat 5` 在三端各跑 5 遍，全部通过再提交 PR，避免把不稳定测试带进门禁。
 4. **打包后的行为**：功能需要新依赖或新文件时，把它加进 `linux package` / `windows package` 作业的转换步骤，证明安装后的产物也能用；macOS 打包见第 6 节。
 5. **Swift 逻辑**：界面以外的纯逻辑（解析、校验、版本比较等）抽成独立文件，在 `tests/` 下写 `XxxTests.swift`，并在 `cross-platform.yml` 的 `swift` 作业里注册。这一步改的是 `.github/`，属于受保护路径，PR 需要维护者审核。
-6. **CLI 与浏览器界面**：新操作要同时出现在 `chamo` CLI 和 `chamo ui` 里，或在文档中写明某端不支持；`tests/test_cli.py`、`tests/test_ui.py` 补对应用例。
+6. **界面**：用户能看到的改动，在 `uitests/` 里补端到端用例。浏览器界面写在 `uitests/browser`；macOS 应用写成 `uitests/macos` 里的 JSON 剧本（需要新动作时扩展 `Sources/DebugHooks.swift` 的 `Scenario`）。画面有意变化时，按 `uitests/README.md` 更新基准截图。
+7. **CLI 与浏览器界面**：新操作要同时出现在 `chamo` CLI 和 `chamo ui` 里，或在文档中写明某端不支持；`tests/test_cli.py`、`tests/test_ui.py` 补对应用例。
 
 ## 6. 已规划、尚未实现的 CI
 
@@ -78,13 +80,13 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 | Release 资产校验（下载、SHA-256、隐私扫描、干净安装与转换） | `release.yml` | 第 0 轮 |
 | 性能基准冒烟（只报告，不卡门禁） | 固定语料、关闭页缓存、记录波动 | 0.2.0 |
 | 质量检查器（渲染比对、SSIM、文字层） | 被各功能测试复用 | 0.2.0 |
-| 应用内 GUI 冒烟（`CHAMO_DEBUG` 钩子注入点击并截图） | 先验证在 macOS runner 上是否稳定，再决定是否作为必需检查 | 0.4.0 前 |
+| 打包后的界面测试（用安装后的 deb、zip、`.app` 跑 `uitests`） | `CHAMO_UI_COMMAND` 已支持指定已安装的 `chamo` | 第 0 轮之后 |
 
 这些作业落地前，相关内容一律视为"未经 CI 验证"。
 
 ## 7. CI 覆盖不到、必须另外验收的部分
 
-- **macOS 界面的真实操作**（点击、拖放、Finder 服务、Dock、通知）：在 Mac 上用打包后的应用验收。容器里的 Agent 做不到，在 PR 和计划里标"待 Mac 验收"。
+- **macOS 系统级交互**（Finder 服务、拖到 Dock、通知授权、侧栏与工具栏的毛玻璃画面）：`ui` 作业覆盖应用窗口内的流程和截图，这些系统级部分仍需在 Mac 上用打包后的应用验收，在 PR 和计划里标"待 Mac 验收"。
 - **真实文档的保真度**：只用维护者提供的小份只读样本，结果写进计划，样本不入库。
 - **签名、公证、Gatekeeper、干净系统安装**：没有证据就不写"已通过"。
 
