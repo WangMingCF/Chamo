@@ -259,11 +259,22 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
     image = Image.new("RGB", (32, 24), (10, 120, 200))
     image.save(source)
 
+    # Converting into a lossy container is measured, not required to be identical:
+    # quality 95 stays close, a different picture does not.
     converted = tmp_path / "converted.jpg"
     image.save(converted, "JPEG", quality=95)
     assert quality.check_image_pairs([(source, converted)], mode="convert") == []
 
+    # Converting into a lossless container must stay pixel-identical.
+    same_png = tmp_path / "same.png"
+    image.save(same_png)
+    assert quality.check_image_pairs([(source, same_png)], mode="convert") == []
     other = Image.new("RGB", (32, 24), (200, 10, 10))
+    changed_png = tmp_path / "changed.png"
+    other.save(changed_png)
+    issues = quality.check_image_pairs([(source, changed_png)], mode="convert")
+    assert any("changed the picture" in issue for issue in issues), issues
+
     changed = tmp_path / "changed.jpg"
     other.save(changed, "JPEG", quality=95)
     issues = quality.check_image_pairs([(source, changed)], mode="convert")
