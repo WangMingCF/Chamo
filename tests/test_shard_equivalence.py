@@ -271,8 +271,14 @@ def test_tree_cpu_clock_counts_a_worker_in_its_own_group():
         "proc = platform_process.spawn_group([sys.executable, '-c', burn])\n"
         "sys.exit(proc.wait())\n")
     proc, tree_cpu = vs.start_measured([sys.executable, "-c", child, str(ROOT / "engine")])
-    assert proc.wait(timeout=60) == 0
-    seconds = tree_cpu()
+    try:
+        code = proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        seconds = tree_cpu()  # also releases the Windows job handle
+    assert code == 0
     assert seconds is not None, "this platform reported no process-tree CPU time"
     assert seconds >= 0.55, (
         "the clock saw %.2f s of CPU, but the worker alone burned 0.6 s: "
@@ -307,6 +313,17 @@ def test_text_timing_verdict_ignores_host_noise_but_not_a_slowdown():
     assert vs.text_timing_verdict(off, [x * 1.04 for x in off])["status"] == "PASS"
     # No usable pair is a failure, not a pass.
     assert vs.text_timing_verdict([], [])["status"] == "FAIL"
+
+
+def test_content_sample_probe_measures_the_real_classifier(tmp_path):
+    """The probe runs the engine's own pageclass and reads only its prefixed lines."""
+    pdf = tmp_path / "text.pdf"
+    vs.make_text_pdf(pdf, 12)
+    for clock in ("cpu", "wall"):
+        seconds, kinds, problems = vs.measure_content_sample_cpu(ROOT / "engine", pdf, reps=1,
+                                                                 clock=clock)
+        assert problems == [] and kinds == ["text"], (problems, kinds)
+        assert 0 < seconds[0] < vs.TEXT_SAMPLE_MAX_SECONDS, seconds
 
 
 def _stub_session(off_times, auto_times, clock="cpu"):
@@ -359,6 +376,26 @@ def test_content_sample_cost_check_can_fail(monkeypatch):
     broken = _gate_checks(_stub_session(off, off), monkeypatch,
                           sample=([], [], ["probe failed"]))
     assert broken["content.text.sample_cost"]["status"] == "FAIL", broken
+    # Under the 5% share but over the absolute cap: 0.28 s of a 60 s run.
+    long_runs = [60.0] * 14
+    capped = _gate_checks(_stub_session(long_runs, long_runs), monkeypatch,
+                          sample=([0.28, 0.27, 0.27], ["text"] * 3, []))
+    assert capped["content.text.sample_cost"]["status"] == "FAIL", capped
+
+
+@pytest.mark.parametrize("clock", ["cpu", "wall"])
+def test_content_sample_cost_uses_the_clock_of_the_off_runs(clock, monkeypatch):
+    """CPU seconds are never divided by wall seconds, and failed off runs are ignored."""
+    seen = []
+
+    def probe(*_args, **kwargs):
+        seen.append(kwargs.get("clock"))
+        return [0.004] * 3, ["text"] * 3, []
+    monkeypatch.setattr(vs, "measure_content_sample_cpu", probe)
+    session = _stub_session([6.0] * 14, [6.0] * 14, clock)
+    checks = {r["name"]: r for r in vs.gate_content_text(session, judge_end_to_end=True)}
+    assert seen == [clock], seen
+    assert checks["content.text.sample_cost"]["status"] == "PASS", checks
 
 
 def test_report_only_timing_never_fails_and_is_not_remeasured(monkeypatch):
@@ -402,3 +439,18 @@ def test_text_timing_gate_remeasures_noise_and_still_fails_a_slowdown(clock, mon
     result = timing(slow)
     assert result["status"] == "FAIL", result
     assert slow.calls[-1] == vs.TEXT_MAX_PAIRS, slow.calls
+
+
+def test_speed_image_sharding_at_least_1_5x(gate):
+    """>= 1.5x end to end on a 240-page image-dominant PDF (local/perf runs only)."""
+    forced = os.environ.get("CHAMO_SHARD_PERF")
+    if forced == "0":
+        pytest.skip("speed gate disabled by CHAMO_SHARD_PERF=0 (explicit skip, NOT a pass)")
+    if forced != "1" and os.environ.get("CI"):
+        pytest.skip(
+            "speed gate skipped because CI is set: the >=1.5x threshold is "
+            "machine-dependent (acceptance contract allows this skip on CI, and "
+            "it is NOT a pass). Run on a quiet machine: "
+            "python scripts/verify_shard.py --mode speed --perf on")
+    assert_gate(vs.gate_speed_image(gate, reps=2))
+    assert SPEEDUP_MIN == 1.5

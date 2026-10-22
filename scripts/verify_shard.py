@@ -84,10 +84,10 @@ MANIFEST_NAME = "清单.json"
 SPEEDUP_MIN = 1.5            # gate 3: image-dominant PDF must be >= 1.5x faster
 TEXT_REGRESSION_MAX = 0.05   # gate 2: text PDF must not regress by more than 5%
 # The text gate judges best-of-N per arm and, while over budget, measures more
-# pairs up to this many before deciding (see text_timing_verdict). More pairs can
-# only clear a false failure, never pass a real slowdown, so the cap is a cost
-# choice: macos-latest noise comes in streaks of minutes, best-of-8 once failed
-# identical work at 12%, and best-of-14 settled within +-3% on three runners.
+# pairs up to this many before deciding (see text_timing_verdict). The cap is an
+# empirical trade-off, not a guarantee: macos-latest noise comes in streaks of
+# minutes, best-of-8 once failed identical work at 12%, and best-of-14 settled
+# within +-3% on three runners (Linux/Windows, where the ratio is judged).
 TEXT_MAX_PAIRS = 14
 # Whether the end-to-end auto/off text timing is a gate on this platform. On
 # macos-latest it cannot be: the same work there costs more or fewer CPU seconds
@@ -100,25 +100,34 @@ TEXT_MAX_PAIRS = 14
 TEXT_END_TO_END_JUDGED = sys.platform != "darwin"
 # Fresh interpreters used to measure the content sample's own CPU cost.
 TEXT_SAMPLE_COST_REPS = 3
+# Second guard on the content sample, independent of the run it is compared
+# with: it measures about 0.02 s, and 5% of an 8-14 s run would let it grow to
+# 0.4-0.7 s before the share check noticed.
+TEXT_SAMPLE_MAX_SECONDS = 0.25
 
 _SAMPLE_COST_PROBE = """
 import sys, time
 sys.path.insert(0, sys.argv[1])
 import pypdfium2  # render() imports it in both arms, so it is not part of the difference
-started = time.process_time()
+cpu, wall = time.process_time(), time.perf_counter()
 import pageclass
 decision = pageclass.classify(sys.argv[2])
-print(repr(time.process_time() - started))
-print(decision["kind"])
+# Prefixed lines: anything else the import or classify() prints is ignored.
+print("CHAMO_SAMPLE_CPU=%r" % (time.process_time() - cpu))
+print("CHAMO_SAMPLE_WALL=%r" % (time.perf_counter() - wall))
+print("CHAMO_SAMPLE_KIND=%s" % decision["kind"])
 """
 
 
-def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAMPLE_COST_REPS):
-    """CPU seconds of what shard=auto adds on a text PDF: import pageclass + classify().
+def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAMPLE_COST_REPS,
+                               clock: str = "cpu"):
+    """Seconds of what shard=auto adds on a text PDF: import pageclass + classify().
 
     Each measurement runs in a fresh interpreter, cold like the engine's own
-    first call. Returns (seconds list, kinds list, problems list).
+    first call. clock is "cpu" or "wall", matching the clock of the shard=off
+    runs it is compared with. Returns (seconds list, kinds list, problems list).
     """
+    key = "CHAMO_SAMPLE_CPU=" if clock == "cpu" else "CHAMO_SAMPLE_WALL="
     seconds, kinds, problems = [], [], []
     for _ in range(max(1, int(reps))):
         try:
@@ -129,18 +138,24 @@ def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAM
         except (OSError, subprocess.SubprocessError) as error:
             problems.append("content sample probe could not run: %s" % error)
             continue
-        lines = done.stdout.strip().splitlines()
-        if done.returncode != 0 or len(lines) < 2:
+        fields = {}
+        for line in done.stdout.splitlines():
+            for prefix in (key, "CHAMO_SAMPLE_KIND="):
+                if line.startswith(prefix):
+                    fields[prefix] = line[len(prefix):].strip()
+        if done.returncode != 0 or len(fields) != 2:
             problems.append("content sample probe failed (rc=%s): %s"
                             % (done.returncode, (done.stderr or done.stdout)[-400:]))
             continue
         try:
-            seconds.append(float(lines[-2]))
+            seconds.append(float(fields[key]))
         except ValueError:
-            problems.append("content sample probe printed %r" % lines[-2])
+            problems.append("content sample probe printed %r" % fields[key])
             continue
-        kinds.append(lines[-1].strip())
+        kinds.append(fields["CHAMO_SAMPLE_KIND="])
     return seconds, kinds, problems
+
+
 # The engine reports the gain floor it used in the job report; it is part of the
 # advertised contract ("only shard when predicted gain >= 10%"), so a gate pins
 # it. Review showed the constant could drift from 1.10 down to 1.01 while
@@ -992,6 +1007,10 @@ class _WindowsJobCpu:
                                                  wintypes.HANDLE(int(proc._handle))))
 
     def resume(self, proc) -> bool:
+        # NtResumeProcess is undocumented but stable since Windows XP (the engine's
+        # pause/resume uses it too); it returns an NTSTATUS, negative on failure.
+        # proc._handle is CPython's process handle on Windows. A failure here is
+        # loud: start_measured() kills the suspended process and raises.
         from ctypes import wintypes
         _k32, ntdll = self._api()
         return ntdll.NtResumeProcess(wintypes.HANDLE(int(proc._handle))) >= 0
@@ -1430,10 +1449,12 @@ def text_timing_verdict(off_times, auto_times):
         used 7.7-14.4 s; a median of 3 pairs failed a PR with 6.8%, best-of-8
         once with 12.1%. 42 interleaved triples on three runners put auto/off
         at a median of 0.97-1.00, auto slower in 14 of 42 pairs.
-    Contention only ever adds time (wall or CPU: cache and SMT contention,
-    frequency drops and steal inflate CPU seconds too), so each arm's smallest
-    measurement is the tightest bound on its own cost. A real slowdown is in
-    every auto run, including the fastest one, and still FAILS the same 5%.
+    Where contention mostly adds time, each arm's smallest measurement is the
+    tightest bound on its own cost: a real slowdown is in every auto run,
+    including the fastest one, and still FAILS the same 5%. That is an empirical
+    property, not a proof - an off arm slowed in every pair could hide a small
+    regression, which interleaving makes unlikely - and it does not hold on
+    macos-latest, where the error is two-sided (see TEXT_END_TO_END_JUDGED).
     """
     if not off_times or not auto_times:
         return {"status": "FAIL", "noise": 0.0, "ratio": 0.0, "regression": 0.0,
@@ -1542,7 +1563,7 @@ def gate_content_text(session: GateSession, reps=None, judge_end_to_end=None) ->
                     for off_run, _auto in pairs]
     auto_cpu_text = ["%.2f" % auto_run["cpu"] if auto_run.get("cpu") else "n/a"
                      for _off, auto_run in pairs]
-    results.append(_content_sample_cost_check(session, pairs, use_cpu))
+    results.append(_content_sample_cost_check(session, usable, use_cpu))
     timing_status = ("FAIL" if problems else verdict["status"] if judge_end_to_end
                      else "REPORT")
     if not judge_end_to_end:
@@ -1568,19 +1589,23 @@ def gate_content_text(session: GateSession, reps=None, judge_end_to_end=None) ->
 
 
 def _content_sample_cost_check(session, pairs, use_cpu) -> dict:
-    """The CPU shard=auto adds on a text PDF, as a share of a shard=off run.
+    """What shard=auto adds on a text PDF, as a share of a shard=off run.
 
     On a text PDF the auto arm runs exactly what the off arm runs plus the content
     sample (import pageclass + classify) before the same single-process render.
     Measuring that part directly is a few milliseconds against seconds, so host
     noise cannot move it across the 5% budget; it is the platform-independent
     half of gate 2 and the only judged timing on macOS (TEXT_END_TO_END_JUDGED).
+    Both sides use the same clock (CPU, or wall where the host reports no CPU)
+    and only off runs that succeeded; TEXT_SAMPLE_MAX_SECONDS is an absolute cap.
     """
     off_costs = [off_run["cpu"] if use_cpu else off_run["wall"]
                  for off_run, _auto in pairs
-                 if (off_run.get("cpu") if use_cpu else off_run.get("wall"))]
+                 if not off_run.get("fatal") and off_run.get("rc") in (0, None)
+                 and (off_run.get("cpu") if use_cpu else off_run.get("wall"))]
     engine_dir = Path(session.engine).resolve().parent
-    seconds, kinds, problems = measure_content_sample_cpu(engine_dir, session.fixture("text"))
+    seconds, kinds, problems = measure_content_sample_cpu(
+        engine_dir, session.fixture("text"), clock="cpu" if use_cpu else "wall")
     if any(kind != "text" for kind in kinds):
         problems.append("the content sample called the text PDF %r (expected 'text')" % kinds)
     if not off_costs:
@@ -1591,14 +1616,18 @@ def _content_sample_cost_check(session, pairs, use_cpu) -> dict:
         if share > TEXT_REGRESSION_MAX:
             problems.append("the content sample costs %.2f%% of a shard=off run (max %.1f%%)"
                             % (share * 100, TEXT_REGRESSION_MAX * 100))
+    if seconds and max(seconds) > TEXT_SAMPLE_MAX_SECONDS:
+        problems.append("the content sample took %.3f s (absolute cap %.2f s)"
+                        % (max(seconds), TEXT_SAMPLE_MAX_SECONDS))
     metric = "child CPU seconds" if use_cpu else "wall time"
     return check(
         "content.text.sample_cost",
         "FAIL" if problems or share is None else "PASS",
         "the content sample shard=auto adds on a text PDF costs <= %.1f%% of a "
-        "shard=off run (max of %d fresh-interpreter CPU measurements vs median off %s)"
-        % (TEXT_REGRESSION_MAX * 100, TEXT_SAMPLE_COST_REPS, metric),
-        "sample CPU %s s vs off median %s s = %s"
+        "shard=off run and <= %.2f s (max of %d fresh-interpreter measurements vs "
+        "median off, both in %s)"
+        % (TEXT_REGRESSION_MAX * 100, TEXT_SAMPLE_MAX_SECONDS, TEXT_SAMPLE_COST_REPS, metric),
+        "sample %s s vs off median %s s = %s"
         % (["%.4f" % value for value in seconds],
            "%.2f" % statistics.median(off_costs) if off_costs else "n/a",
            "%.3f%%" % (share * 100) if share is not None else "n/a"),
@@ -1860,7 +1889,8 @@ def main(argv=None) -> int:
     reported = [result["name"] for result in checks if result["status"] == "REPORT"]
     total = len(checks)
     print()
-    print("RESULT: " + ("FAIL" if failed else "PASS_WITH_SKIPS" if skipped else "PASS")
+    print("RESULT: " + ("FAIL" if failed else "PASS_WITH_SKIPS" if skipped
+                        else "PASS_WITH_REPORTS" if reported else "PASS")
           + " - %d passed, %d failed, %d skipped of %d gates, %.1fs"
           % (passed, len(failed), len(skipped), total, duration))
     if failed:
