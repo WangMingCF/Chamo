@@ -1,0 +1,246 @@
+name: release
+
+# Builds every distributable from a clean runner, verifies each one the way a
+# user would get it (install or mount, launch, convert), and only then creates a
+# DRAFT GitHub Release with the assets and SHA256SUMS.txt. The maintainer reads
+# the draft and publishes it; nothing here publishes on its own.
+#
+# Triggers:
+#   * a tag v<version> matching config/release.json  -> build, verify, draft release
+#   * a PR that touches the release pipeline           -> build and verify only
+#   * workflow_dispatch                                -> build and verify only
+#
+# Not done here (and never claimed): Developer ID signing and notarization. The
+# app stays ad-hoc signed, the Windows ZIP unsigned; the draft notes say so.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/bootstrap_dependencies.py
+      - scripts/build_app.py
+      - scripts/package_dmg.py
+      - scripts/packaged_smoke.py
+      - scripts/prune_python.py
+      - scripts/prune_runtime.py
+      - scripts/restore_libreoffice.py
+      - scripts/build_linux.py
+      - scripts/build_windows.py
+      - third_party/dependencies.json
+      - third_party/requirements.lock
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: version check
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Tag, config and docs agree
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("config/release.json"))["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$REF_TYPE" = tag ] && [ "$REF_NAME" != "v$version" ]; then
+            echo "tag $REF_NAME does not match config/release.json version $version"; exit 1
+          fi
+          python3 scripts/verify_docs_version.py
+
+  macos:
+    name: macOS DMG
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache pinned downloads
+        # Keyed on the pin file: a changed URL or hash always downloads again,
+        # and bootstrap_dependencies.py re-checks every SHA-256 either way.
+        uses: actions/cache@v4
+        with:
+          path: third_party/downloads
+          key: deps-${{ hashFiles('third_party/dependencies.json') }}
+
+      - name: Fetch and verify the bundled runtime
+        run: python3 scripts/bootstrap_dependencies.py
+
+      - name: Build the app
+        run: python3 scripts/build_app.py
+
+      - name: Package the DMG
+        run: python3 scripts/package_dmg.py
+
+      - name: Install from the DMG and convert with it
+        # The user's path: mount read-only, copy the app out, run it from there.
+        run: |
+          set -euo pipefail
+          dmg=$(ls release/Chamo-*-AppleSilicon.dmg)
+          mount="$RUNNER_TEMP/dmg"; install="$RUNNER_TEMP/Applications"
+          mkdir -p "$mount" "$install"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg"
+          ditto "$mount/Chamo.app" "$install/Chamo.app"
+          ls "$mount"
+          hdiutil detach "$mount"
+          codesign --verify --deep --strict "$install/Chamo.app"
+          python3 scripts/packaged_smoke.py "$install/Chamo.app"
+          echo "INSTALLED_APP=$install/Chamo.app" >> "$GITHUB_ENV"
+
+      - name: No build-machine paths inside the app
+        # Compiled bytecode once embedded the builder's home folder. The runner's
+        # workspace must not appear anywhere in the installed bundle.
+        run: |
+          if grep -rl -F "$GITHUB_WORKSPACE" "$INSTALLED_APP" | head -5 | grep .; then
+            echo "the bundle contains the build path $GITHUB_WORKSPACE"; exit 1
+          fi
+          echo "no build path found"
+
+      - name: Privacy scan of the bundle's own text
+        # Hash-based scan (ops/agent-loop/privacy_scan.py) over what the project
+        # wrote: plist, engine, documentation. Third-party binaries are skipped.
+        env:
+          PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
+        run: |
+          if [ -z "$PRIVACY_KEYWORDS" ]; then
+            if [ "${{ github.ref_type }}" = tag ]; then echo "PRIVACY_KEYWORDS is required for a release"; exit 1; fi
+            echo "::warning::PRIVACY_KEYWORDS not available here (fork or dry run); scan skipped"; exit 0
+          fi
+          printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
+          python3 ops/agent-loop/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" files \
+            "$INSTALLED_APP/Contents/Info.plist" "$INSTALLED_APP/Contents/Resources/engine" \
+            "$INSTALLED_APP/Contents/Resources/Documentation"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos
+          path: release/Chamo-*-AppleSilicon.dmg
+          if-no-files-found: error
+
+  linux:
+    name: Linux deb (${{ matrix.arch }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the .deb
+        run: python scripts/build_linux.py --out dist
+      - name: Install and convert with it
+        env:
+          CHAMO_ROOT: ${{ github.workspace }}
+          PYTHONIOENCODING: utf-8
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -o pipefail
+          sudo dpkg -i dist/chamo-cli_*.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libreoffice-core libreoffice-impress libreoffice-writer fonts-noto-cjk
+          bash scripts/verify_deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux-${{ matrix.arch }}
+          path: dist/chamo-cli_*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Windows ZIP
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the portable package
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/build_windows.py --out dist
+      - name: Install LibreOffice
+        shell: pwsh
+        run: choco install libreoffice-fresh -y --no-progress
+      - name: Extract and convert with it
+        env:
+          PYTHONIOENCODING: utf-8
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/chamo-cli_*.zip | Select-Object -First 1
+          Expand-Archive -Path $zip.FullName -DestinationPath dist/extracted -Force
+          $pkg = "dist/extracted/chamo"
+          & "$pkg/python/python.exe" scripts/verify_windows.py --package $pkg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$pkg/python/python.exe" scripts/verify_ui.py --chamo "$pkg/chamo.cmd" --work dist/ui-accept
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/chamo-cli_*.zip
+          if-no-files-found: error
+
+  draft:
+    name: draft release
+    # Only a version tag creates a release; PRs and manual runs stop after verifying.
+    if: github.ref_type == 'tag'
+    needs: [check, macos, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd assets
+          sha256sum * | tee SHA256SUMS.txt
+      - name: Privacy scan of asset names and notes
+        env:
+          PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
+        run: |
+          [ -n "$PRIVACY_KEYWORDS" ] || { echo "PRIVACY_KEYWORDS is required for a release"; exit 1; }
+          printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
+          # The packages' own text was scanned in their build jobs and in review;
+          # here: asset names, the file lists inside them, and the notes.
+          { ls assets; unzip -Z1 assets/*.zip; for d in assets/*.deb; do dpkg-deb -c "$d"; done; cat docs/RELEASE_NOTES.txt; } \
+            | python3 ops/agent-loop/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" text
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          {
+            cat docs/RELEASE_NOTES.txt
+            echo
+            echo "---"
+            echo "校验：下载后用 SHA256SUMS.txt 核对（shasum -a 256 -c SHA256SUMS.txt）。"
+            echo "签名：macOS 版为 ad-hoc 签名，未经 Developer ID 签名与 Apple 公证；Windows 便携包未签名。"
+          } > notes.md
+          gh release create "v$VERSION" assets/* --draft --verify-tag \
+            --title "Chamo $VERSION" --notes-file notes.md
