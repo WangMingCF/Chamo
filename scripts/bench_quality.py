@@ -432,6 +432,12 @@ def check_image_pairs(pairs, mode: str = "lossless", lossy_target: bool = False)
                         issues.append("%s: text metadata %r was added" % (source.name, key))
         except OSError as error:
             issues.append("%s: cannot compare (%s)" % (source.name, error))
+        except Exception as error:                      # noqa: BLE001 - report, never raise
+            # Pillow raises DecompressionBombError for huge images and pypdfium2
+            # raises its own types; letting them escape would kill the whole
+            # benchmark instead of naming the one file that could not be checked.
+            issues.append("%s: cannot compare (%s: %s)"
+                          % (source.name, type(error).__name__, error))
     return issues
 
 
@@ -441,8 +447,10 @@ def check_image_set(sources, out_dir, mode: str = "lossless", lossy_target: bool
     pairs = []
     for source in sources:
         source = Path(source)
-        matches = [path for path in files if path.stem == source.stem
-                   or path.stem == source.stem + " (2)"]
+        # A name collision gets " (2)", " (3)" ... from the engine, so match the
+        # whole series; recognising only " (2)" reported a correct output as missing.
+        collision = re.compile(re.escape(source.stem) + r"(?: \(\d+\))?")
+        matches = [path for path in files if collision.fullmatch(path.stem)]
         if len(matches) != 1:
             return ["%s: expected one output, found %d" % (source.name, len(matches))]
         pairs.append((source, matches[0]))
@@ -505,7 +513,10 @@ def check_pdf_compress(source_pdf, out_dir, sample: int = 8) -> list:
     counterpart is unreliable (renumbering, object reuse), while "the page still
     looks the same" is exactly what the user gets. The sample is evenly spaced and
     capped at 8 pages so a 120-page benchmark stays affordable; the docstring says
-    sample, not every page, because that is what the check does.
+    sample, not every page, because that is what the check does. The sample is
+    rendered at 72 dpi: an embedded picture that was heavily downsampled can hide
+    below that rendering, which is a limit of this check, not a claim of full
+    fidelity (the smoke suite's compression case is the one that would notice).
     """
     issues = []
     outputs = [path for path in deliverables(out_dir) if path.suffix.lower() == ".pdf"]
@@ -566,7 +577,16 @@ def check_rag(sources, out_dir) -> list:
     """
     issues = []
     files = deliverables(out_dir)
-    by_name = {path.name: path for path in files}
+    by_name = {}
+    for path in files:
+        if path.name in by_name:
+            # Two files with the same name (different subfolders) make "the export
+            # equals the source" unverifiable: naming the clash beats comparing one
+            # copy and hoping it is the right one.
+            issues.append("%s: appears more than once in the export (%s, %s)"
+                          % (path.name, by_name[path.name], path))
+            continue
+        by_name[path.name] = path
     expected = {Path(source).name for source in sources}
     for source in sources:
         source = Path(source)
