@@ -242,14 +242,29 @@ def mixed_pdf(path: Path, pages: int) -> Path:
 # Office fixtures
 # --------------------------------------------------------------------------
 def _fixed_properties(package) -> None:
+    """Pin the document properties that would otherwise carry the current time.
+
+    python-pptx and openpyxl expose this differently (core_properties vs
+    properties, author vs creator), and the openpyxl one is what a .xlsx package
+    would otherwise stamp with "now" on every build.
+    """
     import datetime
 
-    core = package.core_properties
-    core.created = datetime.datetime(2020, 1, 1, 0, 0, 0)
-    core.modified = datetime.datetime(2020, 1, 1, 0, 0, 0)
-    core.last_modified_by = "Chamo synthetic corpus"
-    core.author = "Chamo synthetic corpus"
-    core.revision = 1
+    moment = datetime.datetime(2020, 1, 1, 0, 0, 0)
+    core = getattr(package, "core_properties", None)
+    if core is not None:
+        core.created = moment
+        core.modified = moment
+        core.last_modified_by = "Chamo synthetic corpus"
+        core.author = "Chamo synthetic corpus"
+        core.revision = 1
+        return
+    properties = package.properties
+    properties.created = moment
+    properties.modified = moment
+    properties.creator = "Chamo synthetic corpus"
+    properties.lastModifiedBy = "Chamo synthetic corpus"
+    properties.revision = "1"
 
 
 def pptx_deck(path: Path, slides: int) -> Path:
