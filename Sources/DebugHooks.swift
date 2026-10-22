@@ -179,9 +179,17 @@ import Quartz
         // A known content size, because the runner's window is whatever the display
         // allows: the narrow-window checks are about what the layout does at 1024
         // points, not about the runner's default.
-        if let size = s["resize"] as? [String: Any],
-           let width = (size["width"] as? NSNumber)?.doubleValue,
-           let height = (size["height"] as? NSNumber)?.doubleValue {
+        if s["resize"] != nil {
+            let size = s["resize"] as? [String: Any]
+            let width = (size?["width"] as? NSNumber)?.doubleValue
+            let height = (size?["height"] as? NSNumber)?.doubleValue
+            guard let width, let height, width >= 320, height >= 240 else {
+                // A malformed resize must be an error, not a silent skip: the next
+                // screenshot would then be taken at the runner's default size and
+                // compared against a 1024 baseline, and nobody would know why.
+                finish(dir, ok: false, step: i, error: "resize needs width and height >= 320x240")
+                return
+            }
             // The main window, not "the first visible one": a status-bar panel is
             // also in NSApp.windows and also visible, and resizing it would leave
             // the test looking at the runner's default size while claiming 1024.

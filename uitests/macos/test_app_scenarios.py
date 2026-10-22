@@ -115,14 +115,16 @@ def test_pdf_to_images_end_to_end(work):
 
 
 def test_the_window_at_1024_keeps_every_column_readable(work):
-    """The GitHub runner's window is 1024 points wide; that is the width checked here.
+    """At 1024 points wide (the runner's width) no column is cut off.
 
-    1024 is not the window minimum (that is 980), it is the width CI uses and the
-    width at which the "大小" column used to be cut off with a horizontal
-    scrollbar. The screenshot is the evidence: compared with a baseline, a layout
-    regression becomes a picture difference instead of a report nobody checks.
+    What this proves: no horizontal scrollbar at 1024 and the "大小" column shown in
+    full. The sample file name is long on purpose - a short one would fit even with
+    a squeezed name column, and the point is that a real document name still leaves
+    room for the size column. Not covered: the "结果"/"状态" columns are empty here
+    because the run is not started, so their truncation with long values is not
+    exercised (see the PR's 未验证 section).
     """
-    pdf = make_pdf(work / "in" / "讲义.pdf", 3)
+    pdf = make_pdf(work / "in" / "2024年度第三季度财务报表与附录完整版-最终确认稿.pdf", 3)
     out = run(work, "narrow", [
         {"tool": "pdf_images"}, {"output": str(work / "out")},
         {"set": {"format": "png", "dpi": 150}},
