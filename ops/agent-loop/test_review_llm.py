@@ -9,20 +9,46 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("review_llm.py")
+# Runs the script with time.sleep disabled, so retry backoff does not slow the tests.
+RUNNER = ("import time, runpy, sys; time.sleep = lambda s: None; sys.argv = ['review_llm']; "
+          f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')")
 
 
-def serve(reply_status=200):
-    seen = {}
+def sse(*texts: str) -> bytes:
+    chunks = [{"choices": [{"delta": {"content": t}}]} for t in texts]
+    return b"".join(b"data: " + json.dumps(c).encode() + b"\n\n" for c in chunks) + b"data: [DONE]\n\n"
+
+
+def serve(plan):
+    """plan: list of actions per request: "sse", "drop" (close without answering) or an HTTP status."""
+    seen = {"requests": 0}
 
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
+            n = seen["requests"]
+            seen["requests"] += 1
             seen["auth"] = self.headers["Authorization"]
             seen["path"] = self.path
             seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            self.send_response(reply_status)
-            self.end_headers()
-            if reply_status == 200:
+            action = plan[min(n, len(plan) - 1)]
+            if action == "drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+                return
+            if action == "json":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
                 self.wfile.write(json.dumps({"choices": [{"message": {"content": "好\nVERDICT: APPROVE"}}]}).encode())
+                return
+            if action == "sse":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                self.wfile.write(sse("没有阻塞问题。\n", "VERDICT: ", "APPROVE"))
+                return
+            self.send_response(action)
+            self.end_headers()
 
         def log_message(self, *a):
             pass
@@ -33,31 +59,47 @@ def serve(reply_status=200):
 
 
 def run(env):
-    return subprocess.run([sys.executable, str(SCRIPT)], input="评审这个 PR", capture_output=True,
+    return subprocess.run([sys.executable, "-c", RUNNER], input="评审这个 PR", capture_output=True,
                           text=True, env={"PATH": "/usr/bin:/bin", **env}, timeout=120)
 
 
-def test_sends_prompt_and_prints_reply():
-    srv, seen = serve()
-    p = run({"REVIEW_API_KEY": "k-test", "REVIEW_MODEL": "m-test",
-             "REVIEW_API_BASE": f"http://127.0.0.1:{srv.server_port}"})
+def env_for(srv, key="k-test"):
+    return {"REVIEW_API_KEY": key, "REVIEW_MODEL": "m-test",
+            "REVIEW_API_BASE": f"http://127.0.0.1:{srv.server_port}"}
+
+
+def test_streams_the_reply_and_sends_the_prompt():
+    srv, seen = serve(["sse"])
+    p = run(env_for(srv))
     srv.shutdown()
-    assert p.returncode == 0 and p.stdout.strip().endswith("VERDICT: APPROVE")
+    assert p.returncode == 0 and p.stdout.strip().endswith("VERDICT: APPROVE"), p.stderr
     assert seen["path"] == "/chat/completions" and seen["auth"] == "Bearer k-test"
-    assert seen["body"]["model"] == "m-test" and seen["body"]["messages"][1]["content"] == "评审这个 PR"
+    assert seen["body"]["stream"] is True and seen["body"]["model"] == "m-test"
+    assert seen["body"]["messages"][1]["content"] == "评审这个 PR"
+
+
+def test_a_dropped_connection_is_retried():
+    srv, seen = serve(["drop", "sse"])
+    p = run(env_for(srv))
+    srv.shutdown()
+    assert p.returncode == 0 and "VERDICT: APPROVE" in p.stdout, p.stderr
+    assert seen["requests"] == 2 and "attempt 1/3 failed" in p.stderr
+
+
+def test_a_proxy_that_ignores_streaming_still_works():
+    srv, _ = serve(["json"])
+    p = run(env_for(srv))
+    srv.shutdown()
+    assert p.returncode == 0 and p.stdout.strip().endswith("VERDICT: APPROVE"), p.stderr
 
 
 def test_missing_model_fails_without_calling():
     assert run({"REVIEW_API_KEY": "k"}).returncode == 2
 
 
-def test_api_error_fails_and_does_not_print_the_key(monkeypatch):
-    srv, _ = serve(reply_status=500)
-    p = subprocess.run([sys.executable, "-c",
-                        "import time,runpy,sys; time.sleep=lambda s: None; sys.argv=['x']; "
-                        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')"],
-                       input="x", capture_output=True, text=True, timeout=120,
-                       env={"PATH": "/usr/bin:/bin", "REVIEW_API_KEY": "k-secret", "REVIEW_MODEL": "m",
-                            "REVIEW_API_BASE": f"http://127.0.0.1:{srv.server_port}"})
+def test_persistent_errors_fail_and_never_print_the_key():
+    srv, seen = serve([500])
+    p = run(env_for(srv, key="k-secret"))
     srv.shutdown()
-    assert p.returncode != 0 and "k-secret" not in p.stdout + p.stderr
+    assert p.returncode == 1 and seen["requests"] == 3
+    assert "k-secret" not in p.stdout + p.stderr
