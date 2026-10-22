@@ -14,8 +14,8 @@ need gh "PRs, CI results and remote test runs; the static gh binary can be mount
 [ "$problems" = 0 ] || exit 1
 
 # No real identity ever exists in this container.
-git config --global user.name Chamo
-git config --global user.email dev@chamo.invalid
+git config --global user.name 'DeepSeek Harness'
+git config --global user.email dsh@chamo.invalid
 git config --global commit.gpgsign false
 git config --global core.hooksPath "$HERE/hooks"
 git config --global credential.https://github.com.helper '!gh auth git-credential'
@@ -31,4 +31,4 @@ if [ ! -d "$WORKDIR/.git" ]; then
 fi
 gh api "repos/$REPO" --jq '"repository reachable: " + .full_name' 2>/dev/null \
     || { echo "GH_TOKEN cannot read $REPO"; exit 1; }
-echo "ready: commits as Chamo <dev@chamo.invalid>, pushes scanned by $HERE/hooks/pre-push"
+echo "ready: commits as DeepSeek Harness <dsh@chamo.invalid>, pushes scanned by $HERE/hooks/pre-push"
