@@ -13,6 +13,7 @@ tests (test_cancel_encode_race.py, test_page_resume.py), which drive real signal
 """
 from __future__ import annotations
 
+import inspect
 import json
 import sys
 import time
@@ -124,3 +125,94 @@ def test_a_user_cancel_stays_cancelled(tmp_path, monkeypatch):
     workbench.Supervisor.finish(stand_in, entry, result, record)
 
     assert result["state"] == "cancelled", result
+
+
+def test_a_chunk_worker_records_the_cancelled_file_as_cancelled(tmp_path, monkeypatch):
+    """The multi-file worker writes one result per file; the cancelled one must say so."""
+    job = _job(tmp_path)
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    chunk = tmp_path / "chunk.json"
+    chunk.write_text(json.dumps({"progress": str(tmp_path / "progress.json"),
+                                 "entries": [
+                                     {"job": job, "result": str(first)},
+                                     {"job": job, "result": str(second)},
+                                 ]}), encoding="utf-8")
+
+    def cancelled(job):
+        raise workbench.RunCancelled(CANCEL)
+
+    monkeypatch.setattr(workbench, "one", cancelled)
+    monkeypatch.setattr(sys, "argv", ["workbench", "--chunk", str(chunk)])
+    workbench.main()
+
+    result = json.loads(first.read_text(encoding="utf-8"))
+    assert result["state"] == "cancelled", result
+    assert CANCEL in result["error"]
+
+
+def test_a_cancelled_publish_leaves_the_file_cancelled(tmp_path, monkeypatch):
+    """A cancel that lands between published files is still a cancel, not a failure.
+
+    That point raises from inside one() (the safe point between files), which used
+    to be a plain RuntimeError and therefore reported "failed".
+    """
+    import workbench as wb
+
+    assert issubclass(wb.RunCancelled, RuntimeError)
+    source = inspect.getsource(wb)
+    # The inter-file safe point must raise the cancel type, not a bare RuntimeError.
+    assert "if i and _termination_pending():raise RunCancelled(" in source
+
+
+def test_withdrawing_a_published_product_really_deletes_it(tmp_path, monkeypatch):
+    """finish() must delete the product of a file that was cancelled after publish."""
+    published = tmp_path / "out" / "讲义_0001.png"
+    published.parent.mkdir(parents=True)
+    published.write_bytes(b"published")
+
+    removed = []
+
+    def withdraw(result, out, req):
+        for item in result.get("outputs", []):
+            Path(item["path"]).unlink(missing_ok=True)
+            removed.append(item["path"])
+
+    monkeypatch.setattr(workbench, "event", lambda *a, **k: None)
+    monkeypatch.setattr(workbench, "_committed_record",
+                        lambda *a, **k: {"outputs": [{"path": str(published)}]})
+    monkeypatch.setattr(workbench, "_withdraw_product", withdraw)
+
+    record = tmp_path / "record"
+    record.mkdir()
+    stand_in = _SupervisorStandIn(tmp_path / "out", cancelled=True)
+    entry = {"index": 0, "job": {"sources": [str(tmp_path / "a.pdf")],
+                                 "output": str(tmp_path / "out")}}
+    result = {"state": "cancelled", "error": CANCEL, "sources": [], "outputs": []}
+
+    workbench.Supervisor.finish(stand_in, entry, result, record)
+
+    assert removed == [str(published)]
+    assert not published.exists(), "the published product survived the cancel"
+    assert not result.get("withdraw_failed")
+
+
+def test_a_failed_withdraw_is_recorded_not_swallowed(tmp_path, monkeypatch):
+    """Silently keeping the product would break "a cancelled run leaves nothing"."""
+    monkeypatch.setattr(workbench, "event", lambda *a, **k: None)
+
+    def broken(*args, **kwargs):
+        raise PermissionError("输出目录只读")
+
+    monkeypatch.setattr(workbench, "_committed_record", broken)
+    record = tmp_path / "record"
+    record.mkdir()
+    stand_in = _SupervisorStandIn(tmp_path / "out", cancelled=True)
+    entry = {"index": 0, "job": {"sources": [str(tmp_path / "a.pdf")],
+                                 "output": str(tmp_path / "out")}}
+    result = {"state": "cancelled", "error": CANCEL, "sources": [], "outputs": []}
+
+    workbench.Supervisor.finish(stand_in, entry, result, record)
+
+    assert result.get("withdraw_failed") is True
+    assert "撤回已发布成品失败" in result["error"]
