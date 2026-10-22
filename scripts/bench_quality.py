@@ -347,16 +347,25 @@ def check_pdf_images(source_pdf, out_dir, dpi: int) -> list:
     if unexpected:
         issues.append("%d page file(s) that the selection does not contain: %s"
                       % (len(unexpected), unexpected[:8]))
-    for number, image in iter_pdf_pages(source_pdf, dpi):
-        candidate = found.get(number)
-        if candidate is None:
-            image.close()
-            continue
-        issues += compare_with_file(image, candidate, "page %d" % number)
-        image.close()
-        if len(issues) > 12:
-            issues.append("... further differences suppressed")
-            break
+    try:
+        for number, image in iter_pdf_pages(source_pdf, dpi):
+            try:
+                candidate = found.get(number)
+                if candidate is None:
+                    continue
+                issues += compare_with_file(image, candidate, "page %d" % number)
+            finally:
+                # iter_pdf_pages hands ownership to the caller; a page that could
+                # not be compared must still release its bitmap.
+                image.close()
+            if len(issues) > 12:
+                issues.append("... further differences suppressed")
+                break
+    except Exception as error:                      # noqa: BLE001 - report, never raise
+        # A pdfium render or a Pillow decode can fail on a single damaged page;
+        # the check must name it instead of escaping with a traceback (the same
+        # contract check_pdf_compress follows).
+        issues.append("page rendering failed: %s: %s" % (type(error).__name__, error))
     return issues
 
 
@@ -456,6 +465,7 @@ def check_image_set(sources, out_dir, mode: str = "lossless", lossy_target: bool
     """Pair by file name, for a single-image run and for the unit tests."""
     files = deliverables(out_dir)
     pairs = []
+    issues = []
     for source in sources:
         source = Path(source)
         # A name collision gets " (2)", " (3)" ... from the engine, so match the
@@ -463,9 +473,12 @@ def check_image_set(sources, out_dir, mode: str = "lossless", lossy_target: bool
         collision = re.compile(re.escape(source.stem) + r"(?: \(\d+\))?")
         matches = [path for path in files if collision.fullmatch(path.stem)]
         if len(matches) != 1:
-            return ["%s: expected one output, found %d" % (source.name, len(matches))]
+            # Collect and keep going: reporting only the first problem makes the
+            # fix-rerun loop slower than it has to be.
+            issues.append("%s: expected one output, found %d" % (source.name, len(matches)))
+            continue
         pairs.append((source, matches[0]))
-    return check_image_pairs(pairs, mode, lossy_target)
+    return issues + check_image_pairs(pairs, mode, lossy_target)
 
 
 def _part_order(path: Path):
