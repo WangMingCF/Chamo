@@ -307,6 +307,20 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
     assert any("differs too much" in issue for issue in issues), issues
 
 
+def test_check_image_set_reports_every_problem_not_just_the_first(tmp_path):
+    """One missing output must not hide the next one."""
+    from PIL import Image
+
+    first = tmp_path / "one.png"
+    second = tmp_path / "two.png"
+    Image.new("RGB", (8, 8), (1, 2, 3)).save(first)
+    Image.new("RGB", (8, 8), (4, 5, 6)).save(second)
+    empty = tmp_path / "out"
+    empty.mkdir()
+    issues = quality.check_image_set([first, second], empty)
+    assert sum("expected one output" in issue for issue in issues) == 2, issues
+
+
 def test_a_chroma_only_change_is_reported(tmp_path):
     """Luma weights hide a colour shift; the gate must compare channels.
 
