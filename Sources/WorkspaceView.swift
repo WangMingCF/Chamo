@@ -172,18 +172,24 @@ struct FileTable: View {
             // the row-number gutter) still produced a horizontal scrollbar and cut
             // the last column off. 398 fits with room for the gutter; the name
             // column takes the slack and keeps a tooltip with the full path.
+            // The table gets about 498 points at a 1024-point window (sidebar and
+            // inspector take the rest). Minimums alone were not enough: SwiftUI
+            // spreads the *ideal* widths first, so the ideal total (560) still
+            // overflowed and the last column was scrolled out of view. Capping the
+            // four narrow columns keeps the fixed part at 330 and leaves the rest
+            // to the name column, which truncates in the middle and has a tooltip.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
-                .width(min: 150, ideal: 220, max: .infinity)
+                .width(min: 140, ideal: 200, max: .infinity)
             TableColumn("页数", value: \.sortPages) { item in
                 Text(pagesText(item)).foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 44, ideal: 56)
+            }.width(min: 44, ideal: 52, max: 60)
             TableColumn("大小", value: \.size) { item in
                 Text(item.size > 0 ? ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file) : "—").foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 52, ideal: 64)
+            }.width(min: 52, ideal: 60, max: 70)
             TableColumn("结果", value: \.sortResult) { item in ResultCell(item: item, compare: m.operation.hasPrefix("image_") || m.operation == "pdf_compress") }
-                .width(min: 56, ideal: 80)
+                .width(min: 56, ideal: 70, max: 80)
             TableColumn("状态") { item in StatusCell(item: item, reason: m.incompatibility(item)) }
-                .width(min: 96, ideal: 140)
+                .width(min: 96, ideal: 110, max: 120)
         } rows: {
             // Merge tools follow list order, so rows can be dragged into place.
             // Rows carry their id (for merge reordering) and, once converted, the result
