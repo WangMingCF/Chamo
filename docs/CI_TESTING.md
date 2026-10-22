@@ -98,6 +98,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 | --- | --- | --- | --- |
 | `tests/test_page_resume.py::test_cancelled_then_resumed_outputs_match_a_clean_run` | macOS | 取消后输出目录里残留 `.Chamo暂存/<任务>/…_page00041.jpeg`，违反"取消后输出目录保持原样"的约定 | 引擎竞态：线程池在 `submit()` 里按需启动线程，取消异常落在启动等待里时，新线程不在池的线程集合中，`shutdown(wait=True)` 不等它，它在暂存目录被删时写入一页。引擎改为所有页面编码经过一道“门”，`render()` 退出前关门并等正在写的页完成；新增确定性回归测试 `tests/test_cancel_encode_race.py`。PR #2；macos-latest 重复 20/20 通过 |
 | `tests/test_shard_equivalence.py::test_content_text_is_not_sharded_and_not_slower` | Windows | `content.text.timing` 断言失败 | 计时噪声，不是变慢：文本 PDF 上 auto 只多约 2 ms 的内容判定；windows-latest 上同一代码 36 对实测，单对比值 0.95–1.16。Windows 拿不到子进程 CPU 时间，墙钟改按“每臂最快一次”判定，预算仍为 5%，超预算时补测到最多 6 对再下结论，去掉“无法判定”跳过。PR #3；windows-latest 重复 10/10 通过 |
+| `tests/test_cli.py::test_ctrl_c_does_not_wait_for_queued_page_encodes` | macOS | 偶发 `the run never encoded a page; the fixture or the hook is broken` | 测试的时序依赖：启动后固定等 1 s 就发 Ctrl-C，慢 runner 上启动加第一页 300 dpi 渲染超过 1 s，中断到达时还没有任何编码开始，前置条件不成立。改为等编码记录里真的出现第一页再中断（最多等 60 s，超时即失败），不跳过、不重试。`scripts/ci_remote_test.sh --platforms core --repeat 10` 结果见对应 PR |
 
 ## 9. 纪律
 

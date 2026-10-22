@@ -421,8 +421,18 @@ def test_ctrl_c_does_not_wait_for_queued_page_encodes(tmp_path):
          "-t", "pdf-images", "--dpi", "300", "--workers", "1", "--quiet"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
         env=env)
-    time.sleep(1.0)
+    # Interrupt once the first encode has really started, not after a fixed
+    # sleep: on a slow macOS runner start-up and the first 300 dpi render took
+    # longer than 1 s, Ctrl-C arrived before any encode, and the precondition
+    # below failed. Each encode then sleeps 3 s, so the queue is still full.
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and proc.poll() is None:
+        if trace.exists() and trace.read_text(encoding="utf-8").strip():
+            break
+        time.sleep(0.02)
     assert proc.poll() is None, "the run finished before it could be interrupted"
+    assert trace.exists() and trace.read_text(encoding="utf-8").strip(), (
+        "no page encode started within 60 s; the fixture or the hook is broken")
     cancelled_at = time.time()
     code, elapsed, stderr = _interrupt_and_time(proc, 25)
     assert code == 3, f"expected EXIT_CANCELLED, got {code}: {stderr[-500:]}"
