@@ -355,7 +355,7 @@ def check_pdf_images(source_pdf, out_dir, dpi: int) -> list:
     return issues
 
 
-def check_image_pairs(pairs, mode: str = "lossless") -> list:
+def check_image_pairs(pairs, mode: str = "lossless", lossy_target: bool = False) -> list:
     """Compare each source image with the output the run recorded for it.
 
     The pairs come from the run's report.json instead of from matching file names.
