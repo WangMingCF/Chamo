@@ -6,9 +6,14 @@ import Quartz
 /// UI-review hooks compiled only with -D CHAMO_DEBUG (never in release builds).
 /// CHAMO_TOOL, CHAMO_ROUTE=history, CHAMO_ADD=a|b, CHAMO_SELECT=n, CHAMO_START=1, CHAMO_DARK=1,
 /// CHAMO_SNAPSHOT=out.png and CHAMO_SNAPSHOT_DELAY=seconds render the window to a PNG and quit.
+/// CHAMO_SCENARIO=steps.json runs a scripted session instead (see Scenario below).
 @MainActor enum DebugHooks {
     static func run(_ m: Workbench) {
         let env = ProcessInfo.processInfo.environment
+        if let path = env["CHAMO_SCENARIO"] {
+            Scenario.start(m, path: path, out: env["CHAMO_SCENARIO_OUT"] ?? NSTemporaryDirectory())
+            return
+        }
         if let tool = env["CHAMO_TOOL"] { m.switchTool(tool); m.route = .tool(tool) }
         if env["CHAMO_ROUTE"] == "history" { m.route = .history }
         if env["CHAMO_PALETTE"] == "1" { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { m.showPalette = true } }
@@ -112,16 +117,108 @@ import Quartz
         if let path = env["CHAMO_SNAPSHOT"] {
             let delay = Double(env["CHAMO_SNAPSHOT_DELAY"] ?? "2") ?? 2
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                guard var window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.sheetParent == nil }) else { exit(2) }
-                if env["CHAMO_PALETTE"] == "1" || env["CHAMO_SHORTCUTS"] == "1" || env["CHAMO_WHATSNEW"] == "1" || env["CHAMO_UPDATE"] == "1", let sheet = window.attachedSheet { window = sheet }
-                guard let frame = window.contentView?.superview else { exit(2) }
-                guard let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { exit(3) }
-                // Draw with the window's own appearance, not the process default (else dark mode renders light).
-                window.effectiveAppearance.performAsCurrentDrawingAppearance { frame.cacheDisplay(in: frame.bounds, to: rep) }
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                let sheet = env["CHAMO_PALETTE"] == "1" || env["CHAMO_SHORTCUTS"] == "1" || env["CHAMO_WHATSNEW"] == "1" || env["CHAMO_UPDATE"] == "1"
+                if let error = snapshot(to: path, preferSheet: sheet) { print("SNAPSHOT " + error); exit(2) }
                 if env["CHAMO_KEEP"] != "1" { exit(0) }
             }
         }
+    }
+
+    /// Renders the frontmost window (or its sheet) to a PNG in-process with
+    /// cacheDisplay, so no screen-recording permission is involved. Returns an
+    /// error description, or nil on success.
+    static func snapshot(to path: String, preferSheet: Bool) -> String? {
+        guard var window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.sheetParent == nil }) else { return "no visible window" }
+        if preferSheet, let sheet = window.attachedSheet { window = sheet }
+        guard let frame = window.contentView?.superview else { return "window has no frame view" }
+        guard let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return "cannot allocate bitmap" }
+        // Draw with the window's own appearance, not the process default (else dark mode renders light).
+        window.effectiveAppearance.performAsCurrentDrawingAppearance { frame.cacheDisplay(in: frame.bounds, to: rep) }
+        guard let png = rep.representation(using: .png, properties: [:]) else { return "cannot encode PNG" }
+        do { try png.write(to: URL(fileURLWithPath: path)) } catch { return "cannot write \(path): \(error.localizedDescription)" }
+        return nil
+    }
+}
+
+/// CHAMO_SCENARIO=steps.json runs a scripted session for the automated UI tests in
+/// uitests/macos. Each step is a JSON object with one action:
+///   {"tool": "pdf_images"} {"route": "home"|"history"} {"add": [paths]} {"output": path}
+///   {"set": {"format", "dpi", "quality", "max_edge", "lossy", "range", "beside"}}
+///   {"appearance": "dark"|"light"} {"start": true} {"cancel": true} {"retry": true}
+///   {"wait": "finished", "timeout": seconds} {"sleep": seconds}
+///   {"snapshot": name, "sheet": bool} {"summary": name}
+/// Results go to CHAMO_SCENARIO_OUT: name.png per snapshot, name.json per summary
+/// (Workbench.debugSummary), and result.json ({"ok", "step", "error"}); the process
+/// exits 0 when every step ran and 1 otherwise. Everything happens in-process on the
+/// main thread: no accessibility or screen-recording permission, which is what makes
+/// it usable on CI runners.
+@MainActor enum Scenario {
+    static func start(_ m: Workbench, path: String, out: String) {
+        let dir = URL(fileURLWithPath: out)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        guard let data = FileManager.default.contents(atPath: path),
+              let steps = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+            finish(dir, ok: false, step: -1, error: "cannot read scenario \(path)"); return
+        }
+        // Let the window appear and the first layout settle before the first step.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { step(m, steps, 0, dir) }
+    }
+
+    static func step(_ m: Workbench, _ steps: [[String: Any]], _ i: Int, _ dir: URL) {
+        guard i < steps.count else { finish(dir, ok: true, step: i, error: nil); return }
+        let s = steps[i]
+        let next = { (delay: Double) in DispatchQueue.main.asyncAfter(deadline: .now() + delay) { step(m, steps, i + 1, dir) } }
+        if let tool = s["tool"] as? String { m.switchTool(tool); m.route = .tool(tool); next(0.5); return }
+        if let route = s["route"] as? String { m.route = route == "history" ? .history : .home; next(0.5); return }
+        if let paths = s["add"] as? [String] { m.add(paths.map { URL(fileURLWithPath: $0) }); next(1.0); return }
+        if let output = s["output"] as? String { m.output = output; next(0.2); return }
+        if let set = s["set"] as? [String: Any] { apply(m, set); next(0.3); return }
+        if let look = s["appearance"] as? String {
+            NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua); next(0.8); return
+        }
+        if s["start"] != nil { m.start(); next(0.2); return }
+        if s["cancel"] != nil { m.command("cancel"); next(0.2); return }
+        if s["retry"] != nil { m.retryFailed(); next(0.2); return }
+        if let seconds = s["sleep"] as? Double { next(seconds); return }
+        if s["wait"] as? String == "finished" {
+            let deadline = Date().addingTimeInterval(s["timeout"] as? Double ?? 120)
+            func poll() {
+                if !m.running { next(0.6); return }
+                if Date() > deadline { finish(dir, ok: false, step: i, error: "timed out waiting for the run to finish"); return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { poll() }
+            }
+            poll(); return
+        }
+        if let name = s["snapshot"] as? String {
+            if let error = DebugHooks.snapshot(to: dir.appendingPathComponent(name + ".png").path, preferSheet: s["sheet"] as? Bool ?? false) {
+                finish(dir, ok: false, step: i, error: error); return
+            }
+            next(0.1); return
+        }
+        if let name = s["summary"] as? String {
+            try? Data(m.debugSummary().utf8).write(to: dir.appendingPathComponent(name + ".json"))
+            next(0.1); return
+        }
+        finish(dir, ok: false, step: i, error: "unknown step \(s)")
+    }
+
+    static func apply(_ m: Workbench, _ set: [String: Any]) {
+        if let v = set["format"] as? String { m.format = v }
+        if let v = set["dpi"] as? Int { m.dpi = v }
+        if let v = set["quality"] as? Int { m.quality = v }
+        if let v = set["max_edge"] as? Int { m.maxEdge = v }
+        if let v = set["lossy"] as? Bool { m.lossy = v }
+        if let v = set["range"] as? String { m.useRange = true; m.pageRange = v }
+        if let v = set["beside"] as? Bool { m.besideSource = v }
+    }
+
+    static func finish(_ dir: URL, ok: Bool, step: Int, error: String?) {
+        let payload: [String: Any] = ["ok": ok, "step": step, "error": error ?? NSNull()]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
+            try? data.write(to: dir.appendingPathComponent("result.json"))
+        }
+        print("SCENARIO \(ok ? "ok" : "failed") step=\(step) \(error ?? "")")
+        exit(ok ? 0 : 1)
     }
 }
 

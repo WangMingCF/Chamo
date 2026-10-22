@@ -315,13 +315,71 @@ jobs:
           shellcheck -x ops/agent-loop/*.sh ops/agent-loop/hooks/pre-push
           for f in ops/agent-loop/*.sh; do bash -n "$f"; done
 
+  ui:
+    name: ui (${{ matrix.os }})
+    # Interface tests with a real browser on all three systems, and the real macOS
+    # app driven by its debug scenario hooks. Plan and conventions: uitests/README.md.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+          - os: windows-latest
+            label: windows
+          - os: macos-15
+            label: macos
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      PYTHONIOENCODING: utf-8
+      CHAMO_UI_ARTIFACTS: ${{ github.workspace }}/build/ui-artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-engine
+
+      - name: Install the browser test tools
+        shell: bash
+        run: |
+          python -m pip install -r uitests/requirements.txt
+          if [ "$RUNNER_OS" = Linux ]; then python -m playwright install --with-deps chromium
+          else python -m playwright install chromium; fi
+
+      - name: Browser UI
+        shell: bash
+        run: python -m pytest uitests/browser -q -rs --tb=short --junitxml=ui-browser.xml
+
+      - name: Build the debug macOS app
+        if: runner.os == 'macOS'
+        run: python scripts/build_dev_app.py --out build/dev --python-prefix "$(python -c 'import sys; print(sys.prefix)')"
+
+      - name: macOS app scenarios
+        if: runner.os == 'macOS'
+        run: python -m pytest uitests/macos -q -rs --tb=short --junitxml=ui-macos.xml
+
+      - name: Judge the runs
+        if: always()
+        shell: bash
+        run: python scripts/ci_report.py --platform ${{ matrix.label }} --skips tests/ci_allowed_skips.json --title "ui (${{ matrix.os }})" ui-*.xml
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-${{ matrix.label }}
+          path: |
+            build/ui-artifacts
+            ui-*.xml
+          if-no-files-found: warn
+
   all-checks:
     name: all checks
     # The one check branch protection requires. Adding or renaming a job above
     # then needs no change to the protection rule, and a skipped or cancelled job
     # counts as a failure here instead of silently not being required.
     if: always()
-    needs: [engine, package, windows-package, swift, ops]
+    needs: [engine, package, windows-package, swift, ops, ui]
     runs-on: ubuntu-latest
     steps:
       - name: Every job must have succeeded
