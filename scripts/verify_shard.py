@@ -89,6 +89,58 @@ TEXT_REGRESSION_MAX = 0.05   # gate 2: text PDF must not regress by more than 5%
 # choice: macos-latest noise comes in streaks of minutes, best-of-8 once failed
 # identical work at 12%, and best-of-14 settled within +-3% on three runners.
 TEXT_MAX_PAIRS = 14
+# Whether the end-to-end auto/off text timing is a gate on this platform. On
+# macos-latest it cannot be: the same work there costs more or fewer CPU seconds
+# from run to run (two-sided, not only added load), so even each arm's best of 12
+# pairs landed anywhere in 0.89-1.11 on three runners, with one encode thread as
+# well (CV 8.5-11%); 42 interleaved triples showed no real slowdown (median auto/off
+# 0.97-1.00). Evidence in issue #10. There it is measured and REPORTed; the
+# content-sample cost gate (gate_content_text, all platforms) still judges the
+# 5% budget, and Linux/Windows judge the end-to-end ratio as well.
+TEXT_END_TO_END_JUDGED = sys.platform != "darwin"
+# Fresh interpreters used to measure the content sample's own CPU cost.
+TEXT_SAMPLE_COST_REPS = 3
+
+_SAMPLE_COST_PROBE = """
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import pypdfium2  # render() imports it in both arms, so it is not part of the difference
+started = time.process_time()
+import pageclass
+decision = pageclass.classify(sys.argv[2])
+print(repr(time.process_time() - started))
+print(decision["kind"])
+"""
+
+
+def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAMPLE_COST_REPS):
+    """CPU seconds of what shard=auto adds on a text PDF: import pageclass + classify().
+
+    Each measurement runs in a fresh interpreter, cold like the engine's own
+    first call. Returns (seconds list, kinds list, problems list).
+    """
+    seconds, kinds, problems = [], [], []
+    for _ in range(max(1, int(reps))):
+        try:
+            done = subprocess.run([sys.executable, "-I", "-B", "-c", _SAMPLE_COST_PROBE,
+                                   str(engine_dir), str(pdf)],
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=120)
+        except (OSError, subprocess.SubprocessError) as error:
+            problems.append("content sample probe could not run: %s" % error)
+            continue
+        lines = done.stdout.strip().splitlines()
+        if done.returncode != 0 or len(lines) < 2:
+            problems.append("content sample probe failed (rc=%s): %s"
+                            % (done.returncode, (done.stderr or done.stdout)[-400:]))
+            continue
+        try:
+            seconds.append(float(lines[-2]))
+        except ValueError:
+            problems.append("content sample probe printed %r" % lines[-2])
+            continue
+        kinds.append(lines[-1].strip())
+    return seconds, kinds, problems
 # The engine reports the gain floor it used in the job report; it is part of the
 # advertised contract ("only shard when predicted gain >= 10%"), so a gate pins
 # it. Review showed the constant could drift from 1.10 down to 1.01 while
@@ -976,7 +1028,9 @@ class _WindowsJobCpu:
 # Gate result objects and printing
 # --------------------------------------------------------------------------
 def check(name, status, expected, actual, details=None, meta=None) -> dict:
-    assert status in ("PASS", "FAIL", "SKIP")
+    # REPORT: measured and printed, deliberately not judged (see
+    # TEXT_END_TO_END_JUDGED); it is neither a pass nor a skip.
+    assert status in ("PASS", "FAIL", "SKIP", "REPORT")
     return {"name": name, "status": status, "expected": expected,
             "actual": actual, "details": list(details or []),
             "meta": dict(meta or {})}
@@ -1397,8 +1451,15 @@ def text_timing_verdict(off_times, auto_times):
             "inconclusive": None}
 
 
-def gate_content_text(session: GateSession, reps=None) -> list:
-    """Gate 2: a text PDF must not be sharded and must not regress >5%."""
+def gate_content_text(session: GateSession, reps=None, judge_end_to_end=None) -> list:
+    """Gate 2: a text PDF must not be sharded and must not regress >5%.
+
+    Three checks: not_sharded; sample_cost (the CPU that shard=auto adds on a
+    text PDF, as a share of a shard=off run, on every platform); timing (the
+    end-to-end auto/off ratio, judged where TEXT_END_TO_END_JUDGED, else REPORT).
+    """
+    if judge_end_to_end is None:
+        judge_end_to_end = TEXT_END_TO_END_JUDGED
     results = []
     # 2a. Observable: neither the process tree nor the engine report may say the
     # text PDF was sharded.
@@ -1454,8 +1515,10 @@ def gate_content_text(session: GateSession, reps=None) -> list:
         ratios = [off_time / auto_time for off_time, auto_time in timed]
         verdict = text_timing_verdict([off_time for off_time, _ in timed],
                                       [auto_time for _, auto_time in timed])
-        # A failed or timed-out arm is a failure to report, not noise to re-measure.
-        if verdict["status"] == "PASS" or count >= TEXT_MAX_PAIRS or len(timed) != len(pairs):
+        # A failed or timed-out arm is a failure to report, not noise to re-measure;
+        # a report-only measurement is not re-measured either.
+        if (verdict["status"] == "PASS" or count >= TEXT_MAX_PAIRS
+                or len(timed) != len(pairs) or not judge_end_to_end):
             break
         count += 1
     problems = []
@@ -1468,7 +1531,7 @@ def gate_content_text(session: GateSession, reps=None) -> list:
     estimator = "best-of-N per arm"
     ratio, noise = verdict["ratio"], verdict["noise"]
     regression = verdict["regression"]
-    if verdict["status"] == "FAIL":
+    if verdict["status"] == "FAIL" and judge_end_to_end:
         problems.append(
             "text shard=auto is %.1f%% slower than shard=off (%s over %d paired "
             "runs, %s; max allowed %.1f%%)"
@@ -1479,9 +1542,16 @@ def gate_content_text(session: GateSession, reps=None) -> list:
                     for off_run, _auto in pairs]
     auto_cpu_text = ["%.2f" % auto_run["cpu"] if auto_run.get("cpu") else "n/a"
                      for _off, auto_run in pairs]
+    results.append(_content_sample_cost_check(session, pairs, use_cpu))
+    timing_status = ("FAIL" if problems else verdict["status"] if judge_end_to_end
+                     else "REPORT")
+    if not judge_end_to_end:
+        problems.append("end-to-end ratio measured and reported only on this platform, "
+                        "not judged (verify_shard.TEXT_END_TO_END_JUDGED, issue #10); "
+                        "content.text.sample_cost judges the 5% budget here")
     results.append(check(
         "content.text.timing",
-        "FAIL" if problems else verdict["status"],
+        timing_status,
         "text PDF shard=auto must not regress more than %.1f%% vs shard=off "
         "(%s over %d interleaved pairs, measured in %s)"
         % (TEXT_REGRESSION_MAX * 100, estimator, len(pairs), metric),
@@ -1492,8 +1562,48 @@ def gate_content_text(session: GateSession, reps=None) -> list:
            -regression * 100, _loadavg_text()),
         problems,
         meta={"metric": metric, "estimator": estimator, "pairs": len(pairs),
-              "noise": round(noise, 6), "ratio": round(ratio, 6)}))
+              "noise": round(noise, 6), "ratio": round(ratio, 6),
+              "judged": bool(judge_end_to_end)}))
     return results
+
+
+def _content_sample_cost_check(session, pairs, use_cpu) -> dict:
+    """The CPU shard=auto adds on a text PDF, as a share of a shard=off run.
+
+    On a text PDF the auto arm runs exactly what the off arm runs plus the content
+    sample (import pageclass + classify) before the same single-process render.
+    Measuring that part directly is a few milliseconds against seconds, so host
+    noise cannot move it across the 5% budget; it is the platform-independent
+    half of gate 2 and the only judged timing on macOS (TEXT_END_TO_END_JUDGED).
+    """
+    off_costs = [off_run["cpu"] if use_cpu else off_run["wall"]
+                 for off_run, _auto in pairs
+                 if (off_run.get("cpu") if use_cpu else off_run.get("wall"))]
+    engine_dir = Path(session.engine).resolve().parent
+    seconds, kinds, problems = measure_content_sample_cpu(engine_dir, session.fixture("text"))
+    if any(kind != "text" for kind in kinds):
+        problems.append("the content sample called the text PDF %r (expected 'text')" % kinds)
+    if not off_costs:
+        problems.append("no shard=off run to compare the content sample with")
+    share = None
+    if seconds and off_costs:
+        share = max(seconds) / statistics.median(off_costs)
+        if share > TEXT_REGRESSION_MAX:
+            problems.append("the content sample costs %.2f%% of a shard=off run (max %.1f%%)"
+                            % (share * 100, TEXT_REGRESSION_MAX * 100))
+    metric = "child CPU seconds" if use_cpu else "wall time"
+    return check(
+        "content.text.sample_cost",
+        "FAIL" if problems or share is None else "PASS",
+        "the content sample shard=auto adds on a text PDF costs <= %.1f%% of a "
+        "shard=off run (max of %d fresh-interpreter CPU measurements vs median off %s)"
+        % (TEXT_REGRESSION_MAX * 100, TEXT_SAMPLE_COST_REPS, metric),
+        "sample CPU %s s vs off median %s s = %s"
+        % (["%.4f" % value for value in seconds],
+           "%.2f" % statistics.median(off_costs) if off_costs else "n/a",
+           "%.3f%%" % (share * 100) if share is not None else "n/a"),
+        problems,
+        meta={"share": share, "seconds": seconds})
 
 
 def gate_speed_image(session: GateSession, reps=None) -> dict:
@@ -1747,6 +1857,7 @@ def main(argv=None) -> int:
     passed = sum(1 for result in checks if result["status"] == "PASS")
     failed = [result["name"] for result in checks if result["status"] == "FAIL"]
     skipped = [result["name"] for result in checks if result["status"] == "SKIP"]
+    reported = [result["name"] for result in checks if result["status"] == "REPORT"]
     total = len(checks)
     print()
     print("RESULT: " + ("FAIL" if failed else "PASS_WITH_SKIPS" if skipped else "PASS")
@@ -1756,6 +1867,8 @@ def main(argv=None) -> int:
         print("failed gates: " + ", ".join(failed))
     if skipped:
         print("skipped gates (NOT passes): " + ", ".join(skipped))
+    if reported:
+        print("measured and reported only (NOT judged): " + ", ".join(reported))
     print("reproduce: " + " ".join([sys.executable, "scripts/verify_shard.py"]
                                    + list(argv if argv is not None else sys.argv[1:])))
 

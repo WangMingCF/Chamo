@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -195,21 +196,41 @@ def test_decision_model_refuses_cheap_work(gate):
 # Gate 2: content decision (text must not be sharded, must not regress >5%)
 # --------------------------------------------------------------------------
 def test_content_text_is_not_sharded_and_not_slower(gate):
-    """Text PDFs must not be sharded and the content sample must cost <5%.
+    """Text PDFs must not be sharded and shard=auto must cost <5% on them.
 
-    The timing half is judged on the engine tree's CPU seconds, because wall
-    time on a shared CI runner is dominated by other tenants. Every CI platform
-    reports them (Windows through Job Object accounting, see
-    test_tree_cpu_clock_counts_a_worker_in_its_own_group). Only a host without
-    them falls back to wall time. Either clock is judged on best-of-N per arm,
-    re-measured while over budget; see verify_shard.text_timing_verdict.
-    Both halves must PASS.
+    Three checks, all fail-capable:
+      * not_sharded - the report and the process table agree it stayed single;
+      * sample_cost - the CPU shard=auto adds on a text PDF (import pageclass +
+        classify, measured in fresh interpreters) is <= 5% of a shard=off run, on
+        every platform;
+      * timing - the end-to-end auto/off ratio, best-of-N on the engine tree's CPU
+        seconds (wall time where a host reports none), re-measured while over
+        budget; see verify_shard.text_timing_verdict.
+    The end-to-end ratio is judged on Linux and Windows (10/10 there). On macOS it
+    is measured and REPORTed but not judged, by the maintainer's decision in issue
+    #10: identical work on macos-latest costs more or fewer CPU seconds from run to
+    run, so even best-of-12 pairs landed in 0.89-1.11 (one encode thread too), while
+    42 interleaved triples showed no real slowdown. sample_cost keeps the 5% budget
+    enforced there. This is not a skip: the check runs and prints its numbers.
     """
     results = vs.gate_content_text(gate)
-    assert {result["name"] for result in results} == {
-        "content.text.not_sharded", "content.text.timing"}, results
-    for result in results:
-        assert_gate(result)
+    by_name = {result["name"]: result for result in results}
+    assert set(by_name) == {"content.text.not_sharded", "content.text.sample_cost",
+                            "content.text.timing"}, results
+    assert_gate(by_name["content.text.not_sharded"])
+    assert_gate(by_name["content.text.sample_cost"])
+    timing = by_name["content.text.timing"]
+    if vs.TEXT_END_TO_END_JUDGED:
+        assert_gate(timing)
+    else:
+        assert timing["status"] == "REPORT", vs.format_check(timing)
+        assert timing["meta"]["judged"] is False, timing
+        print(vs.format_check(timing))
+
+
+def test_end_to_end_text_timing_is_judged_everywhere_but_macos():
+    """Pin the platform rule from issue #10 so it cannot spread silently."""
+    assert vs.TEXT_END_TO_END_JUDGED is (sys.platform != "darwin")
 
 
 # --------------------------------------------------------------------------
@@ -288,8 +309,74 @@ def test_text_timing_verdict_ignores_host_noise_but_not_a_slowdown():
     assert vs.text_timing_verdict([], [])["status"] == "FAIL"
 
 
+def _stub_session(off_times, auto_times, clock="cpu"):
+    """A GateSession stand-in: the gate logic, not the machine, is under test."""
+    class Args:
+        reps = 3
+
+    def measured(value):
+        if clock == "cpu":
+            return {"rc": 0, "wall": 1.0, "cpu": value}
+        return {"rc": 0, "wall": value, "cpu": None}
+
+    class Session:
+        args = Args()
+        engine = ROOT / "engine" / "workbench.py"
+        calls = []
+
+        def fixture(self, key):
+            return ROOT / "unused.pdf"
+
+        def run(self, key, shard, rep=0, sample=False, range_spec=""):
+            return {"rc": 0, "wall": 1.0, "cpu": None,
+                    "report_results": [{"shard": {"used": False, "shards": 1,
+                                                  "kind": "text", "mode": shard}}]}
+
+        def paired_reps(self, key, range_spec="", count=None):
+            self.calls.append(count)
+            return [(measured(off_times[i]), measured(auto_times[i]))
+                    for i in range(count)]
+    return Session()
+
+
+def _gate_checks(session, monkeypatch, sample=([0.004, 0.003, 0.003], ["text"] * 3, []),
+                 judge=True):
+    monkeypatch.setattr(vs, "measure_content_sample_cpu", lambda *_a, **_k: sample)
+    return {r["name"]: r for r in vs.gate_content_text(session, judge_end_to_end=judge)}
+
+
+def test_content_sample_cost_check_can_fail(monkeypatch):
+    """sample_cost is the judged 5% on macOS, so it must go red when it should."""
+    off = [6.0] * 14
+    quiet = _gate_checks(_stub_session(off, off), monkeypatch)
+    assert quiet["content.text.sample_cost"]["status"] == "PASS", quiet
+    costly = _gate_checks(_stub_session(off, off), monkeypatch,
+                          sample=([0.40, 0.35, 0.36], ["text"] * 3, []))
+    assert costly["content.text.sample_cost"]["status"] == "FAIL", costly
+    misread = _gate_checks(_stub_session(off, off), monkeypatch,
+                           sample=([0.004] * 3, ["image"] * 3, []))
+    assert misread["content.text.sample_cost"]["status"] == "FAIL", misread
+    broken = _gate_checks(_stub_session(off, off), monkeypatch,
+                          sample=([], [], ["probe failed"]))
+    assert broken["content.text.sample_cost"]["status"] == "FAIL", broken
+
+
+def test_report_only_timing_never_fails_and_is_not_remeasured(monkeypatch):
+    """macOS: an 8% end-to-end difference is printed, not judged; no extra pairs."""
+    off = [6.0] * 14
+    session = _stub_session(off, [x * 1.08 for x in off])
+    checks = _gate_checks(session, monkeypatch, judge=False)
+    timing = checks["content.text.timing"]
+    assert timing["status"] == "REPORT", timing
+    assert timing["meta"]["judged"] is False
+    assert session.calls == [3], session.calls
+    # ...while the same numbers on a judged platform fail.
+    judged = _gate_checks(_stub_session(off, [x * 1.08 for x in off]), monkeypatch)
+    assert judged["content.text.timing"]["status"] == "FAIL", judged
+
+
 @pytest.mark.parametrize("clock", ["cpu", "wall"])
-def test_text_timing_gate_remeasures_noise_and_still_fails_a_slowdown(clock):
+def test_text_timing_gate_remeasures_noise_and_still_fails_a_slowdown(clock, monkeypatch):
     """The gate measures more pairs while over budget, then decides.
 
     A stub session stands in for the engine: the gate logic, not the machine, is
@@ -298,31 +385,10 @@ def test_text_timing_gate_remeasures_noise_and_still_fails_a_slowdown(clock):
     clocks: CPU seconds where the platform reports them, else wall time.
     """
     def session_with(off_times, auto_times):
-        class Args:
-            reps = 3
-
-        def measured(value):
-            if clock == "cpu":
-                return {"rc": 0, "wall": 1.0, "cpu": value}
-            return {"rc": 0, "wall": value, "cpu": None}
-
-        class Session:
-            args = Args()
-            calls = []
-
-            def run(self, key, shard, rep=0, sample=False, range_spec=""):
-                return {"rc": 0, "wall": 1.0, "cpu": None,
-                        "report_results": [{"shard": {"used": False, "shards": 1,
-                                                      "kind": "text", "mode": shard}}]}
-
-            def paired_reps(self, key, range_spec="", count=None):
-                self.calls.append(count)
-                return [(measured(off_times[i]), measured(auto_times[i]))
-                        for i in range(count)]
-        return Session()
+        return _stub_session(off_times, auto_times, clock)
 
     def timing(session):
-        return {r["name"]: r for r in vs.gate_content_text(session)}["content.text.timing"]
+        return _gate_checks(session, monkeypatch)["content.text.timing"]
 
     off = [6.17, 6.20, 6.22, 6.18, 6.19, 6.21, 6.20] * 2
     noisy = session_with(off, [6.80, 6.90, 7.51, 6.20, 6.95, 7.00, 7.10] * 2)
