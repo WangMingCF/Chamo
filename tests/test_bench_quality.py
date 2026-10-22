@@ -317,6 +317,26 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
     assert any("differs too much" in issue for issue in issues), issues
 
 
+def test_a_lossy_result_at_half_resolution_is_reported(tmp_path):
+    """A "smaller by throwing pixels away" result must not pass the measured paths.
+
+    SSIM downscales both sides to 64x64, so a half-resolution result of the same
+    aspect ratio scores about 1.0; only an explicit size check catches it.
+    """
+    from PIL import Image
+
+    source = tmp_path / "photo.png"
+    Image.new("RGB", (64, 48), (10, 120, 200)).save(source)
+    half = tmp_path / "half.jpg"
+    Image.new("RGB", (32, 24), (10, 120, 200)).save(half, "JPEG", quality=95)
+
+    issues = quality.check_image_pairs([(source, half)], mode="lossy")
+    assert any("size changed" in issue for issue in issues), issues
+    issues = quality.check_image_pairs([(source, half)], mode="convert",
+                                       lossy_target=True)
+    assert any("size changed" in issue for issue in issues), issues
+
+
 def test_check_image_set_reports_every_problem_not_just_the_first(tmp_path):
     """One missing output must not hide the next one."""
     from PIL import Image
