@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
@@ -104,20 +105,31 @@ def sha256_file(path: Path) -> str:
 # --------------------------------------------------------------------------
 # Normalisation applied to every OOXML package this module writes
 # --------------------------------------------------------------------------
+# ISO-8601 timestamps inside docProps/*.xml. openpyxl and python-pptx refresh
+# these at save time even when the caller pinned the properties, which makes two
+# builds of the same workbook differ. Only the property parts are rewritten; a
+# timestamp that belongs to the document's own content is left alone.
+_PACKAGE_TIMESTAMP = re.compile(rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?")
+_PACKAGE_TIMESTAMP_REPLACEMENT = b"2020-01-01T00:00:00Z"
+
+
 def _normalize_zip(path: Path) -> None:
-    """Rewrite an OOXML package with fixed entry timestamps.
+    """Rewrite an OOXML package into a reproducible form.
 
     Two writers can produce the same document and different bytes: the zip entry
-    time is part of the archive. Re-zipping with a constant timestamp keeps the
-    corpus reproducible without patching the writers. Entry order is preserved so
-    the result is stable, the compression level is fixed, and the original is
-    replaced atomically (write beside it, then rename).
+    time is part of the archive, and the document properties carry the time the
+    file was saved. Both are normalised here so the corpus is byte-identical on
+    every build and every machine, without patching the writers. Entry order is
+    preserved, the compression level is fixed, and the original is replaced
+    atomically (write beside it, then rename).
     """
     with zipfile.ZipFile(path) as source:
         entries = [(info.filename, source.read(info.filename)) for info in source.infolist()]
     temporary = path.with_name(path.name + ".normalizing")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as target:
         for name, data in entries:
+            if name.startswith("docProps/") and name.endswith(".xml"):
+                data = _PACKAGE_TIMESTAMP.sub(_PACKAGE_TIMESTAMP_REPLACEMENT, data)
             info = zipfile.ZipInfo(name, date_time=ZIP_TIMESTAMP)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
