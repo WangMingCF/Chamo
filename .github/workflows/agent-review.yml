@@ -85,6 +85,13 @@ jobs:
             echo "agent-review: $1 — $2"
           }
           comment() { gh pr comment "$PR" -R "$GITHUB_REPOSITORY" -F "$1" > /dev/null; }
+          # A maintainer release of this exact commit (ops/agent-loop/approve_pr.sh)
+          # is final. A review run that finishes later must not overwrite it.
+          released=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/statuses" \
+            --jq '[.[] | select(.context == "agent-review" and .state == "success" and (.description | startswith("维护者")))] | length')
+          if [ "${released:-0}" != 0 ]; then
+            echo "this commit was released by the maintainer; leaving the status as is"; exit 0
+          fi
           status pending "评审中"
 
           if [ -z "$PRIVACY_KEYWORDS" ]; then
