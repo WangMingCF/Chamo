@@ -114,7 +114,7 @@ def test_pdf_to_images_end_to_end(work):
     visual.compare(out / "ready.png", "pdf-images-ready")
 
 
-def test_the_narrowest_window_shows_every_column(work):
+def test_the_window_at_1024_keeps_every_column_readable(work):
     """The GitHub runner's window is 1024 points wide; that is the width checked here.
 
     1024 is not the window minimum (that is 980), it is the width CI uses and the
