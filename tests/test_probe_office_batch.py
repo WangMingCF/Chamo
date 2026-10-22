@@ -64,7 +64,11 @@ def test_the_probe_runs_both_arms_and_their_output_is_correct(tmp_path):
 
 
 def _publish_numbers(report: dict) -> None:
-    """Put the probe's numbers on the Actions page.
+    """Put the probe's numbers where a person can read them without a failure.
+
+    Two places, because the step summary is only visible on the Actions page while
+    the workflow artifact can be downloaded and diffed: the summary for whoever is
+    reading the run, and results/office-probe.json for the next comparison.
 
     The probe exists to produce numbers for a decision, and a number that only
     lives in a temporary directory is not evidence. GitHub stores a step summary
@@ -73,6 +77,10 @@ def _publish_numbers(report: dict) -> None:
     """
     import os
 
+    artifacts = Path("results")
+    if artifacts.is_dir():
+        (artifacts / "office-probe.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
