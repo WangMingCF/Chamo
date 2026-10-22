@@ -1,0 +1,72 @@
+name: unit
+
+# The parts cross-platform.yml does not cover: the macOS app's Swift code and the
+# self-iteration tooling. An agent working on Linux cannot compile Swift at all,
+# so this job is the only thing that stops a broken macOS app from being merged.
+# The plan for every test layer is in docs/CI_TESTING.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: unit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: swift (macos-15)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swiftc --version
+
+      - name: Build the app (release and debug-hook variants)
+        # Same sources and frameworks as scripts/build_app.py; -Onone keeps it quick.
+        # The CHAMO_DEBUG variant is built too because the GUI checks depend on it.
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci
+          ui=$(ls Sources/*.swift | grep -v ImageDecode.swift)
+          fw="-framework SwiftUI -framework AppKit -framework PDFKit -framework UniformTypeIdentifiers -framework ImageIO -framework QuickLookThumbnailing -framework Quartz -framework UserNotifications"
+          for flags in "" "-D CHAMO_DEBUG"; do
+            # shellcheck disable=SC2086
+            swiftc -swift-version 5 -parse-as-library -Onone -module-cache-path build/ci/mc \
+              -target arm64-apple-macosx15.0 $flags $ui -o build/ci/Chamo $fw
+            echo "built with flags: [$flags]"
+          done
+          swiftc -module-cache-path build/ci/mc -target arm64-apple-macosx15.0 \
+            Sources/ImageDecode.swift -o build/ci/dwnative -framework ImageIO -framework UniformTypeIdentifiers
+
+      - name: Swift tests
+        run: |
+          set -euo pipefail
+          swiftc -module-cache-path build/ci/mc -parse-as-library \
+            Sources/GitHubFeedback.swift tests/FeedbackTests.swift -o build/ci/feedback-tests
+          build/ci/feedback-tests
+          swiftc -module-cache-path build/ci/mc -parse-as-library \
+            Sources/GitHubFeedback.swift Sources/UpdateCheck.swift tests/UpdateTests.swift -o build/ci/update-tests
+          build/ci/update-tests
+
+  ops:
+    name: ops scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Privacy scan tests
+        run: |
+          python -m pip install pytest==9.1.1
+          python -m pytest ops/agent-loop -q -rs
+
+      - name: Shell scripts
+        run: |
+          shellcheck -x ops/agent-loop/*.sh ops/agent-loop/hooks/pre-push
+          for f in ops/agent-loop/*.sh; do bash -n "$f"; done

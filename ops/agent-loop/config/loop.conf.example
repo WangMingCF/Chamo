@@ -1,0 +1,14 @@
+# /etc/chamo-agent/loop.conf — limits and switches shared by both users.
+# Root-owned; the agent cannot change its own limits.
+REPO=WangMingCF/chamo
+STATUS_ISSUE=                     # number of the issue that receives round reports
+WORKDIR=/home/chamo-agent/chamo   # the agent's clone
+MAX_ROUNDS_PER_DAY=6
+MAX_CONSECUTIVE_FAILURES=3        # then the loop parks itself until a person looks
+ROUND_TIMEOUT=14400               # seconds per round (4 h)
+ROUND_INTERVAL=900                # pause between rounds
+RELEASE_MODE=draft                # draft: agent only creates draft releases; publish: may publish after verification
+STOP_FILE=/etc/chamo-agent/STOP   # touch this file to stop both loops
+REVIEW_CONTEXT=agent-review       # the required status check name
+REVIEW_TIMEOUT=1800
+MAX_DIFF_BYTES=400000
