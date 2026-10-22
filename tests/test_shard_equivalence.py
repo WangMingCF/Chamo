@@ -197,11 +197,12 @@ def test_decision_model_refuses_cheap_work(gate):
 def test_content_text_is_not_sharded_and_not_slower(gate):
     """Text PDFs must not be sharded and the content sample must cost <5%.
 
-    The timing half is judged on child CPU seconds where the platform reports
-    them, because wall time on a shared CI runner is dominated by other tenants.
-    On a platform without child CPU time (Windows) it is judged on each arm's
-    fastest wall time, re-measured up to TEXT_WALL_MAX_PAIRS pairs while over
-    budget; see verify_shard.text_wall_verdict. Both halves must PASS.
+    The timing half is judged on the engine tree's CPU seconds, because wall
+    time on a shared CI runner is dominated by other tenants. Every CI platform
+    reports them (Windows through Job Object accounting, see
+    test_tree_cpu_clock_counts_a_worker_in_its_own_group). Only a host without
+    them falls back to best-of-N wall time; see verify_shard.text_wall_verdict.
+    Both halves must PASS.
     """
     results = vs.gate_content_text(gate)
     assert {result["name"] for result in results} == {
@@ -239,6 +240,36 @@ def test_text_timing_verdicts_keep_the_5_percent_bar():
     assert vs.text_timing_verdict([0.80, 0.81, 0.80])["status"] == "FAIL"
     # No usable pair is a failure, not a pass.
     assert vs.text_timing_verdict([])["status"] == "FAIL"
+
+
+def test_tree_cpu_clock_counts_a_worker_in_its_own_group():
+    """The timing gates' CPU clock must include the engine's workers.
+
+    The engine starts each worker with platform_process.spawn_group: a new session
+    on POSIX, a job object of its own on Windows. A clock that only saw the
+    supervisor would report a fraction of the work and could hide a slowdown, so
+    a grandchild started exactly that way burns about 0.6 s of CPU here and the
+    clock must see it. Runs on every platform, including Windows, where the clock
+    is the Job Object accounting rather than RUSAGE_CHILDREN.
+    """
+    import subprocess
+    import sys
+
+    child = (
+        "import subprocess, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import platform_process\n"
+        "burn = 'import time\\nend = time.process_time() + 0.6\\n"
+        "while time.process_time() < end: pass\\n'\n"
+        "proc = platform_process.spawn_group([sys.executable, '-c', burn])\n"
+        "sys.exit(proc.wait())\n")
+    proc, tree_cpu = vs.start_measured([sys.executable, "-c", child, str(ROOT / "engine")])
+    assert proc.wait(timeout=60) == 0
+    seconds = tree_cpu()
+    assert seconds is not None, "this platform reported no process-tree CPU time"
+    assert seconds >= 0.55, (
+        "the clock saw %.2f s of CPU, but the worker alone burned 0.6 s: "
+        "work in the worker's own group/job is not counted" % seconds)
 
 
 def test_text_wall_verdict_ignores_host_noise_but_not_a_slowdown():
