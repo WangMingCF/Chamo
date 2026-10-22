@@ -184,7 +184,7 @@ def main(argv=None) -> int:
                 sequential.append(convert_sequential(soffice, sources, work, rep, args.timeout))
         for name in ("sequential", "batched"):
             issues += ["%s: %s" % (name, issue) for issue in
-                       check_outputs(sources, work / "out-%s-%02d" % (name, args.reps - 1))]
+                       check_outputs(sources, work / ("out-%s-%02d" % (name, args.reps - 1)))]
         after = {path.name: sha256_file(path) for path in sources}
         if before != after:
             issues.append("an input file changed during the probe")
