@@ -18,8 +18,6 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
 import workbench  # noqa: E402
 
@@ -150,8 +148,13 @@ def test_a_chunk_worker_records_the_cancelled_file_as_cancelled(tmp_path, monkey
     assert CANCEL in result["error"]
 
 
-def test_withdrawing_a_published_product_really_deletes_it(tmp_path, monkeypatch):
-    """finish() must delete the product of a file that was cancelled after publish."""
+def test_finish_withdraws_the_product_of_a_cancelled_file(tmp_path, monkeypatch):
+    """finish() must trigger the withdrawal of what a cancelled file published.
+
+    The deletion itself lives in _withdraw_product (covered by the engine tests);
+    this test pins the wiring in finish(): that the helper is called, and that a
+    failure in it is recorded instead of swallowed.
+    """
     published = tmp_path / "out" / "讲义_0001.png"
     published.parent.mkdir(parents=True)
     published.write_bytes(b"published")
@@ -201,3 +204,21 @@ def test_a_failed_withdraw_is_recorded_not_swallowed(tmp_path, monkeypatch):
 
     assert result.get("withdraw_failed") is True
     assert "撤回已发布成品失败" in result["error"]
+
+
+def test_the_real_supervisor_and_withdraw_helpers_line_up():
+    """The stand-in must not hide a missing attribute or a changed signature.
+
+    finish() calls _committed_record(..., newer_than=self.started_wall) and then
+    _withdraw_product(...). A typo in either name would be swallowed by the
+    surrounding except, every cancel would be marked withdraw_failed, and the
+    published product would silently survive - with the mocked tests still green.
+    """
+    import inspect
+
+    supervisor = workbench.Supervisor({"output": "/tmp/chamo-cancel-gate"})
+    assert hasattr(supervisor, "started_wall"), "finish() reads self.started_wall"
+    assert isinstance(supervisor.started_wall, float)
+    parameters = inspect.signature(workbench._committed_record).parameters
+    assert "newer_than" in parameters, parameters
+    assert callable(workbench._withdraw_product)
