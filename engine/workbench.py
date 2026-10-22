@@ -1595,7 +1595,7 @@ def one(job):
                 # Safe point between files: a cancel that arrived while signals were
                 # blocked is honoured here, with the published-so-far list intact, so
                 # Ctrl-C during a long publish still exits in about a second.
-                if i and _termination_pending():raise RuntimeError('任务已取消，原件保留，可重新核验并恢复')
+                if i and _termination_pending():raise RunCancelled('任务已取消，原件保留，可重新核验并恢复')
                 expected=sha(f)
                 if clean:
                     target,adopt=unique_target(dest,names[i],expected,taken);taken.add(target)
@@ -2201,7 +2201,11 @@ class Supervisor:
             atomic_json(record/'report.json',summary)
             lines=['Chamo 处理报告',f'成功 {summary["success"]} / 异常 {summary["failed"]} / 已取消 {summary["cancelled"]} / 输入任务 {self.total} / 成品 {len(outputs)}',f'排除音视频 {excluded}；跳过不适用文件 {skipped}；用时 {summary["seconds"]} 秒',f'状态：{summary["state"]}','原件保留在原位置。upload-manifest.jsonl 为成功输出清单；batch-*.json 为上传批次索引。','保真标记：verified_content 内容校验；rendered_static 静态渲染；derived_export 派生导出；lossy_user_selected 主动选择质量损失。','']
             for r in self.results:
-                if r['state'] not in ('complete','resumed'):lines.extend(['异常：'+ '；'.join(r['sources']),r.get('error','未完成'),''])
+                if r['state']=='cancelled':
+                    # Not an exception: the header counts these separately, so the
+                    # body must not call the same files 异常 right underneath it.
+                    lines.extend(['已取消：'+ '；'.join(r['sources']),r.get('error','任务已取消'),''])
+                elif r['state'] not in ('complete','resumed'):lines.extend(['异常：'+ '；'.join(r['sources']),r.get('error','未完成'),''])
                 elif r.get('compress'):
                     info=r['compress']
                     lines.extend(['压缩：'+'；'.join(r['sources']),
