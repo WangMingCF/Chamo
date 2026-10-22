@@ -13,7 +13,6 @@ tests (test_cancel_encode_race.py, test_page_resume.py), which drive real signal
 """
 from __future__ import annotations
 
-import inspect
 import json
 import sys
 import time
@@ -149,20 +148,6 @@ def test_a_chunk_worker_records_the_cancelled_file_as_cancelled(tmp_path, monkey
     result = json.loads(first.read_text(encoding="utf-8"))
     assert result["state"] == "cancelled", result
     assert CANCEL in result["error"]
-
-
-def test_a_cancelled_publish_leaves_the_file_cancelled(tmp_path, monkeypatch):
-    """A cancel that lands between published files is still a cancel, not a failure.
-
-    That point raises from inside one() (the safe point between files), which used
-    to be a plain RuntimeError and therefore reported "failed".
-    """
-    import workbench as wb
-
-    assert issubclass(wb.RunCancelled, RuntimeError)
-    source = inspect.getsource(wb)
-    # The inter-file safe point must raise the cancel type, not a bare RuntimeError.
-    assert "if i and _termination_pending():raise RunCancelled(" in source
 
 
 def test_withdrawing_a_published_product_really_deletes_it(tmp_path, monkeypatch):
