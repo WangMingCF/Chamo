@@ -38,15 +38,38 @@ bench = _load("chamo_bench", "scripts/bench.py")
 # --------------------------------------------------------------------------
 # Corpus reproducibility
 # --------------------------------------------------------------------------
+def _member_differences(left: Path, right: Path) -> list:
+    """Which parts inside two OOXML packages differ (empty for a non-zip file).
+
+    A byte difference in a .xlsx or .pptx says "something changed" but not what,
+    and the writer that changed it is what the next fix has to target. Naming the
+    members turns a red test into a diagnosis.
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(left) as first, zipfile.ZipFile(right) as second:
+            names = sorted(set(first.namelist()) | set(second.namelist()))
+            changed = []
+            for name in names:
+                if name not in first.namelist() or name not in second.namelist():
+                    changed.append(name + " (present on one side only)")
+                elif first.read(name) != second.read(name):
+                    changed.append(name)
+            return changed
+    except zipfile.BadZipFile:
+        return []
+
+
 def test_the_same_suite_builds_the_same_bytes(tmp_path):
     """A benchmark comparison is only meaningful if the input did not change."""
     first = corpus.build(tmp_path / "a", "smoke")
     second = corpus.build(tmp_path / "b", "smoke")
-    assert [entry["sha256"] for entry in first["files"]] == \
-           [entry["sha256"] for entry in second["files"]], (
-               "the smoke corpus is not reproducible: %s"
-               % [entry["path"] for entry, other in zip(first["files"], second["files"])
-                  if entry["sha256"] != other["sha256"]])
+    differing = [entry["path"] for entry, other in zip(first["files"], second["files"])
+                 if entry["sha256"] != other["sha256"]]
+    detail = {name: _member_differences(tmp_path / "a" / name, tmp_path / "b" / name)
+              for name in differing}
+    assert differing == [], "the smoke corpus is not reproducible: %s" % detail
     assert corpus.check(tmp_path / "a") == []
 
 
