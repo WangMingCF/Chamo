@@ -67,6 +67,14 @@ def test_a_different_reason_is_not_covered_by_the_entry(tmp_path):
     assert run(tmp_path, "windows", xml, skips=ALLOW).returncode == 1
 
 
+def test_prefix_entry_matches_reasons_with_measured_values(tmp_path):
+    xml = junit(tmp_path / "a.xml", [("t1", "skipped", "/w/tests/test_x.py:9: gate inconclusive: ratio 0.99x")])
+    allow = {"linux": [{"file": "tests/test_x.py", "reason_prefix": "gate inconclusive: ", "why": "noise"}]}
+    assert run(tmp_path, "linux", xml, skips=allow).returncode == 0
+    allow["linux"][0]["reason_prefix"] = "other: "
+    assert run(tmp_path, "linux", xml, skips=allow).returncode == 1
+
+
 def test_no_tests_is_not_a_pass(tmp_path):
     assert run(tmp_path, "linux", junit(tmp_path / "a.xml", [])).returncode == 1
     assert run(tmp_path, "linux", tmp_path / "missing.xml").returncode == 1
@@ -83,4 +91,4 @@ def test_the_repository_allowlist_is_well_formed():
     for platform in ("all", "linux", "windows", "macos"):
         for e in data[platform]:
             assert e["file"].startswith("tests/") and (ROOT / e["file"]).is_file(), e
-            assert e["reason"] and e["why"], e
+            assert (e.get("reason") or e.get("reason_prefix")) and e["why"], e

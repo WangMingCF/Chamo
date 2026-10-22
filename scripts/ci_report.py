@@ -36,8 +36,8 @@ def load_allowed(path: Path | None, platform: str) -> list[dict]:
     data = json.loads(path.read_text(encoding="utf-8"))
     entries = data.get("all", []) + data.get(platform, [])
     for e in entries:
-        if not {"file", "reason", "why"} <= e.keys():
-            raise SystemExit(f"ci_report: every allowed skip needs file, reason and why: {e}")
+        if not ({"file", "why"} <= e.keys() and ("reason" in e) != ("reason_prefix" in e)):
+            raise SystemExit(f"ci_report: every allowed skip needs file, why and exactly one of reason / reason_prefix: {e}")
     return entries
 
 
@@ -82,7 +82,9 @@ def analyse(runs: list[dict[str, dict]], allowed: list[dict]) -> dict:
         for tid, info in run.items():
             if info["outcome"] != "skipped" or info["reason"].startswith("xfail"):
                 continue
-            if any(e["file"] == info["file"] and e["reason"] == info["reason"] for e in allowed):
+            if any(e["file"] == info["file"] and (info["reason"] == e["reason"] if "reason" in e
+                                                   else info["reason"].startswith(e["reason_prefix"]))
+                   for e in allowed):
                 allowed_hits += 1
             else:
                 unexpected.append((tid, info["file"], info["reason"]))
