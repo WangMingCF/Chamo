@@ -167,18 +167,23 @@ struct FileTable: View {
             // and produced a horizontal scrollbar. The name column is the only one
             // that can absorb slack, so it gets the flexible range and the rest
             // keep their minimums.
+            // Measured on a 1024-point window: the sidebar and the inspector leave
+            // about 500 points for the table, and the earlier minimums (452 plus
+            // the row-number gutter) still produced a horizontal scrollbar and cut
+            // the last column off. 398 fits with room for the gutter; the name
+            // column takes the slack and keeps a tooltip with the full path.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
-                .width(min: 180, ideal: 260, max: .infinity)
+                .width(min: 150, ideal: 220, max: .infinity)
             TableColumn("页数", value: \.sortPages) { item in
                 Text(pagesText(item)).foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 48, ideal: 60)
+            }.width(min: 44, ideal: 56)
             TableColumn("大小", value: \.size) { item in
                 Text(item.size > 0 ? ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file) : "—").foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 56, ideal: 72)
+            }.width(min: 52, ideal: 64)
             TableColumn("结果", value: \.sortResult) { item in ResultCell(item: item, compare: m.operation.hasPrefix("image_") || m.operation == "pdf_compress") }
-                .width(min: 64, ideal: 96)
+                .width(min: 56, ideal: 80)
             TableColumn("状态") { item in StatusCell(item: item, reason: m.incompatibility(item)) }
-                .width(min: 104, ideal: 160)
+                .width(min: 96, ideal: 140)
         } rows: {
             // Merge tools follow list order, so rows can be dragged into place.
             // Rows carry their id (for merge reordering) and, once converted, the result
