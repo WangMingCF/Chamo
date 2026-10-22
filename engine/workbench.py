@@ -2277,10 +2277,11 @@ def main():
                                cache=page_cache_adopt(spec.get('cache')))
             result={'state':'ok','files':_expected_page_files(spec['stem'],selected,spec['config']),
                     'cache':cache_stats,'seconds':round(time.monotonic()-started,3)}
-        except RunCancelled as error:
-            result={'state':'cancelled','files':[],'error':str(error),
-                    'seconds':round(time.monotonic()-started,3)}
         except Exception as error:
+            # No special case for RunCancelled here on purpose: shard_interrupted
+            # still raises a plain RuntimeError (see above), so the shard path has
+            # no way to produce that state, and a worker must not write a state its
+            # consumer was never taught to read.
             result={'state':'failed','files':[],'error':f'{type(error).__name__}: {error}',
                     'seconds':round(time.monotonic()-started,3)}
         atomic_json(result_path,result,durable=False)
