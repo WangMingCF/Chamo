@@ -52,70 +52,77 @@ CHAMO = ROOT / "engine" / "chamo.py"
 
 SCHEMA = 1
 
-# Each case is one operation on one corpus item. "quality" names the check in
-# scripts/bench_quality.py that has to pass before the timing counts.
-CASES = {
-    "smoke": [
-        {"name": "pdf-images.text", "operation": "pdf_images", "input": "text.pdf",
-         "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}},
-        {"name": "pdf-images.scan", "operation": "pdf_images", "input": "scan.pdf",
-         "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}},
+# Each case is one operation on one corpus item. "quality" carries the options of
+# the check in scripts/bench_quality.py that has to pass before the timing counts.
+def cases_for(suite: str) -> list:
+    """The cases of one suite, with the corpus's own numbers in their names.
+
+    The page counts belong in the name because a report is read out of context: a
+    case called "text120" that actually ran on the 37-page holdout document would
+    make two reports look comparable when their inputs differ. A full run also
+    covers the extra operations; the smoke suite is the few seconds CI can afford.
+    """
+    spec = corpus_builder.SUITES[suite]
+    text_pages, scan_pages, mixed_pages = (spec["text_pages"], spec["scan_pages"],
+                                           spec["mixed_pages"])
+    full = suite != "smoke"
+    cases = [
+        {"name": "pdf-images.text%d" % text_pages, "operation": "pdf_images",
+         "input": "text.pdf", "config": {"format": "png", "dpi": 150},
+         "quality": {"dpi": 150}},
+        {"name": "pdf-images.scan%d" % scan_pages, "operation": "pdf_images",
+         "input": "scan.pdf", "config": {"format": "png", "dpi": 150},
+         "quality": {"dpi": 150}},
+    ]
+    if full:
+        cases.append({"name": "pdf-images.mixed%d" % mixed_pages,
+                      "operation": "pdf_images", "input": "mixed.pdf",
+                      "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}})
+    cases += [
         {"name": "image-convert.batch", "operation": "image_convert", "inputs": "images",
          "config": {"format": "png"}, "quality": {"lossy": False}},
-        {"name": "image-compress.lossless", "operation": "image_compress", "inputs": "images",
-         "config": {"format": "png", "lossy": False}, "quality": {"lossy": False}},
-        {"name": "pdf-compress.lossless", "operation": "pdf_compress", "input": "text.pdf",
-         "config": {"lossy": False}, "quality": {}},
-        {"name": "rag.strict", "operation": "rag", "input": "deck.pptx", "config": {},
-         "quality": {}},
-        # The office fixtures are only worth having if LibreOffice opens them, and
-        # the quality check only means something if it sees the rendered words.
-        # Writer and Impress are installed on every engine CI job; Calc is not
-        # (see .github/actions/setup-engine), so the .xlsx case lives in the
-        # representative suite instead of failing the smoke run on Linux for a
-        # reason that has nothing to do with the benchmark.
+        {"name": "image-compress.lossless", "operation": "image_compress",
+         "inputs": "images", "config": {"format": "png", "lossy": False},
+         "quality": {"lossy": False}},
+    ]
+    if full:
+        cases.append({"name": "image-compress.jpeg", "operation": "image_compress",
+                      "inputs": "images",
+                      "config": {"format": "jpeg", "lossy": True, "quality": 80},
+                      "quality": {"lossy": True}})
+    cases.append({"name": "pdf-compress.lossless", "operation": "pdf_compress",
+                  "input": "text.pdf", "config": {"lossy": False}, "quality": {}})
+    if full:
+        cases.append({"name": "pdf-split.strict", "operation": "pdf_split",
+                      "input": "text.pdf", "config": {"pdf_pages": 25}, "quality": {}})
+    # The office fixtures are only worth having if LibreOffice opens them, and the
+    # quality check only means something if it sees the rendered words. Writer and
+    # Impress are installed on every engine CI job; Calc is not (see
+    # .github/actions/setup-engine), so the .xlsx case is not in the smoke suite
+    # instead of failing the smoke run on Linux for a reason unrelated to the
+    # benchmark.
+    cases += [
         {"name": "office-pdf.deck", "operation": "office_pdf", "input": "deck.pptx",
          "config": {}, "quality": {}},
         {"name": "office-pdf.memo", "operation": "office_pdf", "input": "memo.docx",
          "config": {}, "quality": {}},
-        {"name": "engine.cli-start", "kind": "command",
-         "argv": [sys.executable, "-I", "-B", str(CHAMO), "--help"]},
-    ],
-    "representative": [
-        {"name": "pdf-images.text120", "operation": "pdf_images", "input": "text.pdf",
-         "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}},
-        {"name": "pdf-images.scan24", "operation": "pdf_images", "input": "scan.pdf",
-         "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}},
-        {"name": "pdf-images.mixed20", "operation": "pdf_images", "input": "mixed.pdf",
-         "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}},
-        {"name": "image-convert.batch", "operation": "image_convert", "inputs": "images",
-         "config": {"format": "png"}, "quality": {"lossy": False}},
-        {"name": "image-compress.lossless", "operation": "image_compress", "inputs": "images",
-         "config": {"format": "png", "lossy": False}, "quality": {"lossy": False}},
-        {"name": "image-compress.jpeg", "operation": "image_compress", "inputs": "images",
-         "config": {"format": "jpeg", "lossy": True, "quality": 80},
-         "quality": {"lossy": True}},
-        {"name": "pdf-compress.lossless", "operation": "pdf_compress", "input": "text.pdf",
-         "config": {"lossy": False}, "quality": {}},
-        {"name": "pdf-split.strict", "operation": "pdf_split", "input": "text.pdf",
-         "config": {"pdf_pages": 25}, "quality": {}},
-        {"name": "office-pdf.deck", "operation": "office_pdf", "input": "deck.pptx",
-         "config": {}, "quality": {}},
-        {"name": "office-pdf.memo", "operation": "office_pdf", "input": "memo.docx",
-         "config": {}, "quality": {}},
-        {"name": "office-pdf.sheet", "operation": "office_pdf", "input": "sheet.xlsx",
-         "config": {}, "quality": {}},
-        {"name": "rag.strict", "operation": "rag", "input": "deck.pptx", "config": {},
-         "quality": {}},
-        {"name": "engine.cli-start", "kind": "command",
-         "argv": [sys.executable, "-I", "-B", str(CHAMO), "--help"]},
-        {"name": "engine.import", "kind": "command",
-         "argv": [sys.executable, "-I", "-B", "-c",
-                  "import sys; sys.path.insert(0, sys.argv[1]); import workbench",
-                  str(ROOT / "engine")]},
-    ],
-}
-CASES["holdout"] = [dict(case) for case in CASES["representative"]]
+    ]
+    if full:
+        cases.append({"name": "office-pdf.sheet", "operation": "office_pdf",
+                      "input": "sheet.xlsx", "config": {}, "quality": {}})
+    cases.append({"name": "rag.strict", "operation": "rag", "input": "deck.pptx",
+                  "config": {}, "quality": {}})
+    cases.append({"name": "engine.cli-start", "kind": "command",
+                  "argv": [sys.executable, "-I", "-B", str(CHAMO), "--help"]})
+    if full:
+        cases.append({"name": "engine.import", "kind": "command",
+                      "argv": [sys.executable, "-I", "-B", "-c",
+                               "import sys; sys.path.insert(0, sys.argv[1]); import workbench",
+                               str(ROOT / "engine")]})
+    return cases
+
+
+CASES = {name: cases_for(name) for name in corpus_builder.SUITES}
 
 
 def load_module(name: str, path: Path):
@@ -329,11 +336,19 @@ def run_case(case: dict, corpus: Path, work: Path, reps: int, timeout: int,
     if case.get("kind") == "command":
         record["runs"] = [run_command(case["argv"], timeout) for _ in range(reps)]
         record.update(summarise(record["runs"]))
-        record["status"] = "FAIL" if any(run["rc"] not in (0, None) for run in record["runs"]) else "PASS"
+        # A timeout is a failure, not a pass without a number: run_command reports
+        # rc=None when it gives up, so "rc not in (0, None)" would accept it. The
+        # two paths of the same decision have to agree with each other.
+        timed_out = any(run.get("timed_out") for run in record["runs"])
+        failed = any(run.get("rc") != 0 for run in record["runs"])
+        record["status"] = "FAIL" if (timed_out or failed) else "PASS"
         record["quality"] = {"issues": []}
-        if record["status"] == "FAIL":
-            record["quality"]["issues"] = ["command exited with %s"
-                                           % [run["rc"] for run in record["runs"]]]
+        if timed_out:
+            record["quality"]["issues"] = ["timed out after %ds" % timeout]
+        elif failed:
+            record["quality"]["issues"] = ["exit codes %s"
+                                           % [run.get("rc") for run in record["runs"]]]
+        record["timing_adopted"] = record["status"] == "PASS"
         return record
 
     inputs = ([corpus / case["input"]] if case.get("input")
@@ -364,6 +379,9 @@ def run_case(case: dict, corpus: Path, work: Path, reps: int, timeout: int,
     record.update(summarise(record["runs"]))
     record["quality"] = {"issues": issues}
     record["status"] = "FAIL" if issues else "PASS"
+    # "A timing from a wrong output is not used" has to be a fact in the report,
+    # not an instruction to the reader: a consumer can filter on this flag.
+    record["timing_adopted"] = record["status"] == "PASS"
     if not keep_outputs and record["status"] == "PASS":
         remove_tree(work / name)
     return record
@@ -422,6 +440,13 @@ def main(argv=None) -> int:
                 print("corpus problem: %s" % problem, file=sys.stderr)
             return 2
         manifest = json.loads((corpus / corpus_builder.MANIFEST_NAME).read_text(encoding="utf-8"))
+        # The suite in the report must describe the corpus that was actually used:
+        # a holdout corpus labelled "representative" produces numbers nobody can
+        # compare, which is the one thing this file exists to prevent.
+        if manifest.get("suite") != args.suite:
+            print("corpus at %s was built for suite %r, not %r"
+                  % (corpus, manifest.get("suite"), args.suite), file=sys.stderr)
+            return 2
     else:
         corpus = work / "corpus"
         print("[corpus] building the %s suite in %s" % (args.suite, corpus), flush=True)
@@ -433,6 +458,9 @@ def main(argv=None) -> int:
         parser.error("--only %r matched no case" % args.only)
 
     report = {"schema": SCHEMA, "suite": args.suite, "reps": args.reps,
+              # The plan requires three repetitions for a number that is quoted;
+              # below that the report says so instead of leaving it to the reader.
+              "reps_reported": args.reps >= 3,
               "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "machine": machine_info(), "dependencies": dependency_versions(),
               "environment": {"CHAMO_PAGE_CACHE": "0"},
@@ -446,8 +474,9 @@ def main(argv=None) -> int:
         report["cases"].append(record)
         print("        %s median %ss spread %s%%%s"
               % (record["status"],
-                 record.get("median_seconds"),
-                 round((record.get("spread") or 0) * 100, 1),
+                 record.get("median_seconds") if record.get("timing_adopted") else "-",
+                 round((record.get("spread") or 0) * 100, 1) if record.get("timing_adopted")
+                 else "-",
                  "" if record["status"] == "PASS"
                  else "  <-- " + "; ".join(record["quality"]["issues"][:2])), flush=True)
     if args.app:
@@ -457,9 +486,13 @@ def main(argv=None) -> int:
     print("")
     print("%-26s %10s %10s %8s  %s" % ("case", "median s", "min s", "spread", "verdict"))
     for record in report["cases"]:
-        print("%-26s %10s %10s %7s%%  %s"
-              % (record["name"], record.get("median_seconds"), record.get("min_seconds"),
-                 round((record.get("spread") or 0) * 100, 1), record["status"]))
+        adopted = record.get("timing_adopted")
+        print("%-26s %10s %10s %8s  %s"
+              % (record["name"],
+                 record.get("median_seconds") if adopted else "-",
+                 record.get("min_seconds") if adopted else "-",
+                 ("%.1f%%" % (record.get("spread") * 100)) if adopted and record.get("spread") is not None else "-",
+                 record["status"]))
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",

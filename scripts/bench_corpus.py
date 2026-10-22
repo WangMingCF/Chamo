@@ -24,6 +24,13 @@ re-zipped with fixed entry timestamps and fixed core properties, and no path,
 host name or wall-clock value reaches a file. Do not add a writer that embeds
 the current time without normalising the package with _normalize_zip.
 
+Byte identity across machines assumes the dependency lock: JPEG bytes come from
+the pinned Pillow/libjpeg build, so a different encoder version changes them
+without anything in the engine changing. The manifest makes that visible rather
+than silent (a check fails and names the file), but a dependency bump is expected
+to require regenerating the manifest, and it must not be mistaken for a change in
+what Chamo does.
+
 Usage
 -----
     python scripts/bench_corpus.py --dest build/bench-corpus/representative
@@ -419,6 +426,8 @@ def build(dest, suite: str = "representative") -> dict:
         raise SystemExit("unknown suite %r (choose from %s)" % (suite, ", ".join(sorted(SUITES))))
     spec = SUITES[suite]
     dest = Path(dest)
+    if dest.exists() and not dest.is_dir():
+        raise SystemExit("corpus destination is a file, not a directory: %s" % dest)
     if dest.exists() and any(dest.iterdir()):
         raise SystemExit("refusing to write into a non-empty directory: %s" % dest)
     dest.mkdir(parents=True, exist_ok=True)
