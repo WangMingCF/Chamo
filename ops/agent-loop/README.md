@@ -7,7 +7,7 @@
 ```
 群晖容器（开发 Agent）                     GitHub
   目标模式提示词 prompts/goal.md
-  写代码 → git commit（身份固定 Chamo）
+  写代码 → git commit（身份固定 DeepSeek Harness）
   git push ──[pre-push 隐私扫描]──────────▶ 分支
   scripts/ci_remote_test.sh ─────────────▶ test-matrix：任意平台、可重复运行
   gh pr create ──────────────────────────▶ PR
@@ -21,7 +21,7 @@
 | `prompts/goal.md` | 目标模式提示词，交给 harness |
 | `prompts/round.md` | 单轮提示词（只在用 `run_loop.sh` 按轮驱动时使用） |
 | `prompts/review.md` | 评审标准，`agent-review` 工作流使用 |
-| `container_init.sh` | 容器启动时运行：固定 git 身份、挂上推送钩子、检查工具与令牌、克隆仓库 |
+| `container_init.sh` | 容器启动时运行：固定 git 身份（DeepSeek Harness <dsh@chamo.invalid>）、挂上推送钩子、检查工具与令牌、克隆仓库 |
 | `hooks/pre-push` | 推送前隐私扫描 |
 | `privacy_scan.py` | 隐私扫描：关键词只存哈希，命中只报编号 |
 | `review_llm.py` | 评审工作流调用模型 API 的客户端（OpenAI 兼容接口，默认 DeepSeek） |
@@ -53,8 +53,8 @@ allow:io\.github\.<用户名>\.chamo
 1. **Secrets 和 Variables**（仓库 Settings → Secrets and variables → Actions）：
    - Secret `PRIVACY_KEYWORDS`：第 1 步生成的文件的全部内容。没有它，评审一律拒绝放行。
    - Secret `REVIEW_API_KEY`：评审用的模型 API key。
-   - Variable `REVIEW_MODEL`：评审用的模型名。建议与开发 Agent 不同，至少用不同的模式（比如推理模型）。
-   - Variable `REVIEW_API_BASE`（可选）：默认 `https://api.deepseek.com`。
+   - Secret `REVIEW_API_BASE`（可选）：OpenAI 兼容接口地址，默认 `https://api.deepseek.com`。用 Secret 而不是 Variable，是因为公开仓库的运行日志会显示 Variable 的值。
+   - Variable `REVIEW_MODEL`：评审用的模型名。建议与开发 Agent 不同。
 2. **标签**：`agent-stop`（总开关）和 `accepted`（只有带这个标签的 Issue 才会被当作任务）。再建一个状态 Issue，记下编号。
 3. **开发令牌**（细粒度，只授权这一个仓库）：Contents 读写、Pull requests 读写、Issues 读写、Actions 读写（用来触发 `test-matrix`）。
    - **不要**给 Commit statuses：这样 Agent 无法自己设置 `agent-review`。

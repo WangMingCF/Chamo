@@ -20,8 +20,10 @@ name: agent-review
 #   secrets   REVIEW_API_KEY      model API key
 #             PRIVACY_KEYWORDS    contents of the hashed keyword file (required:
 #                                 without it every review fails closed)
-#   variables REVIEW_MODEL        model name, e.g. the DeepSeek reasoning model
-#             REVIEW_API_BASE     optional, default https://api.deepseek.com
+#             REVIEW_API_BASE     optional, default https://api.deepseek.com; a secret,
+#                                 not a variable, so the endpoint is masked in the
+#                                 public run logs
+#   variables REVIEW_MODEL        model name
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -67,7 +69,7 @@ jobs:
         env:
           REVIEW_API_KEY: ${{ secrets.REVIEW_API_KEY }}
           REVIEW_MODEL: ${{ vars.REVIEW_MODEL }}
-          REVIEW_API_BASE: ${{ vars.REVIEW_API_BASE }}
+          REVIEW_API_BASE: ${{ secrets.REVIEW_API_BASE }}
           PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
         run: |
           set -uo pipefail
@@ -106,8 +108,10 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --paginate \
             --jq '.[] | [.commit.author.name + " <" + .commit.author.email + ">", .commit.committer.name + " <" + .commit.committer.email + ">"] | .[]' \
             | sort -u > "$work/identities.txt"
-          if grep -vxF 'Chamo <dev@chamo.invalid>' "$work/identities.txt" | grep -q .; then
-            status failure "提交身份不是 Chamo <dev@chamo.invalid>"; exit 0
+          # The agent commits as DeepSeek Harness; Chamo is the maintainer-side
+          # identity used before the agent existed. Neither carries personal data.
+          if grep -vxF -e 'DeepSeek Harness <dsh@chamo.invalid>' -e 'Chamo <dev@chamo.invalid>' "$work/identities.txt" | grep -q .; then
+            status failure "提交身份不是 DeepSeek Harness <dsh@chamo.invalid>"; exit 0
           fi
           { grep -E '^\+' "$work/diff.patch" | grep -vE '^\+\+\+ ' || true
             jq -r '.title + "\n" + (.body // "")' <<< "$pr_json"

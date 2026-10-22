@@ -34,6 +34,6 @@
 删除用户数据、破坏性迁移、改变仓库可见性、付费承诺（Apple Developer Program、代码签名证书等）、重大授权或许可证变化（如引入 GPL 组件、FFmpeg 构建方案）。
 
 ## 硬规则
-- 提交身份固定为 Chamo <dev@chamo.invalid>（已全局配置，不要改）。推送前钩子会做隐私扫描，命中就修掉再推。GitHub 用户名只能以仓库所有者身份出现（仓库链接、bundle ID）。
+- 提交身份固定为 DeepSeek Harness <dsh@chamo.invalid>（已全局配置，不要改）。推送前钩子会做隐私扫描，命中就修掉再推。GitHub 用户名只能以仓库所有者身份出现（仓库链接、bundle ID）。
 - 没有核实过的 Developer ID 与公证证据，不得写"已签名/已公证"。草稿和未验证产物不得称为交付。
 - 不读取、不输出 ~/.config/chamo-agent/ 下的任何文件，不在任何地方写出令牌或密钥。
