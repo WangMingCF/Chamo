@@ -56,7 +56,7 @@
 | 项 | 状态 |
 | --- | --- |
 | 代码 | `main` = `d5c1636`，单提交；Swift 界面约 3,100 行，引擎约 7,700 行（含 `cloud_kb_pack`）；254 个 Python 测试 + 2 组 Swift 测试 |
-| CI | `cross-platform.yml`：ubuntu/windows/macos 引擎测试（真实 LibreOffice，Office 转换不得跳过）+ Linux deb、Windows zip 打包与装包后转换；最近一次全绿 |
+| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、自循环工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。现有两个间歇失败的测试见 `docs/CI_TESTING.md` 第 8 节 |
 | 发布 | **尚无任何 Release**。旧的本地发布脚本已删除，需要 GitHub Actions 发布流程 |
 | 签名 | macOS ad-hoc，未做 Developer ID 签名与公证；Windows 未签名 |
 | 能力 | PDF 转图片（分片成本模型、页级续跑）、PDF 拆分/合并/压缩、Office/WPS 转 PDF/图片、图片合成 PDF、图片转换/压缩、RAG 严格预处理；CLI `chamo`、本机浏览器界面 `chamo ui` |

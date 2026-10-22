@@ -1,0 +1,146 @@
+name: test-matrix
+
+# Multi-platform verification on demand and every night, beyond the PR gate:
+#   * on demand: an agent on Linux can run any tests on Windows and macOS runners
+#     (scripts/ci_remote_test.sh wraps this), optionally repeated to expose
+#     flaky tests;
+#   * nightly: the full suite on the wider runner set, three times, so a race
+#     that the single PR run misses shows up as "flaky" in the summary.
+# Every run is judged by scripts/ci_report.py: failures, flaky tests, skips not
+# registered in tests/ci_allowed_skips.json, and empty runs all fail.
+# workflow_dispatch only works once this file is on the default branch; after
+# that, `--ref <branch>` runs it against any branch.
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: "core = ubuntu/windows/macos latest; extended = more OS versions and arm64; or one of linux/windows/macos"
+        type: choice
+        options: [core, extended, linux, windows, macos]
+        default: core
+      tests:
+        description: "pytest paths or node ids, space separated"
+        type: string
+        default: tests
+      filter:
+        description: "optional pytest -k expression"
+        type: string
+        default: ""
+      repeat:
+        description: "how many times to run the selection (1-10); more than 1 detects flaky tests"
+        type: number
+        default: 1
+  schedule:
+    - cron: "17 19 * * *"   # nightly, outside the working day in UTC+8
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-matrix-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      repeat: ${{ steps.pick.outputs.repeat }}
+    steps:
+      - id: pick
+        # Inputs reach the script through env, never through ${{ }} inside the
+        # script text, so a crafted input cannot inject shell.
+        env:
+          PLATFORMS: ${{ github.event_name == 'schedule' && 'extended' || inputs.platforms }}
+          REPEAT: ${{ github.event_name == 'schedule' && '3' || inputs.repeat }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          core = [("ubuntu-latest", "linux"), ("windows-latest", "windows"), ("macos-latest", "macos")]
+          extended = [("ubuntu-22.04", "linux"), ("ubuntu-24.04", "linux"), ("ubuntu-24.04-arm", "linux"),
+                      ("windows-2022", "windows"), ("windows-2025", "windows"),
+                      ("macos-15", "macos")]
+          pick = os.environ["PLATFORMS"]
+          rows = {"core": core, "extended": extended}.get(pick) or [r for r in core if r[1] == pick]
+          repeat = min(max(int(os.environ["REPEAT"] or 1), 1), 10)
+          print("matrix=" + json.dumps({"include": [{"os": o, "label": l} for o, l in rows]}))
+          print(f"repeat={repeat}")
+          PY
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-engine
+
+      - name: Run the selection
+        # No -x here: every run goes to the end so the summary can compare runs.
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+          TESTS: ${{ github.event_name == 'schedule' && 'tests' || inputs.tests }}
+          FILTER: ${{ github.event_name == 'schedule' && '' || inputs.filter }}
+          REPEAT: ${{ needs.plan.outputs.repeat }}
+        run: |
+          mkdir -p results
+          read -r -a selection <<< "$TESTS"
+          for i in $(seq 1 "$REPEAT"); do
+            echo "::group::run $i of $REPEAT"
+            args=(-q -rs --tb=short -p no:cacheprovider --junitxml="results/run-$i.xml")
+            [ -n "$FILTER" ] && args+=(-k "$FILTER")
+            python -m pytest "${selection[@]}" "${args[@]}" 2>&1 | tee "results/run-$i.log" || true
+            echo "::endgroup::"
+          done
+
+      - name: Judge the runs
+        if: always()
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          status=0
+          python scripts/ci_report.py --platform ${{ matrix.label }} --skips tests/ci_allowed_skips.json \
+            --title "${{ matrix.os }}" --summary "results/summary.md" results/run-*.xml || status=$?
+          cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.os }}
+          path: results/
+          retention-days: 14
+
+  summary:
+    name: summary
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: all
+      - name: One page for every platform
+        run: |
+          {
+            echo "## 多端测试汇总"
+            for f in all/*/summary.md; do [ -f "$f" ] && cat "$f"; done
+          } > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: summary
+          path: summary.md
+      - name: Fail if any platform failed
+        env:
+          RESULT: ${{ needs.test.result }}
+        run: test "$RESULT" = success

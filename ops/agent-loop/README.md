@@ -1,38 +1,37 @@
-# 在 Linux VPS 上自循环迭代
+# 在群晖 Docker 容器里自循环迭代
 
-这套脚本让一个 Agent 在 Linux 服务器上按 `docs/ITERATION_PLAN.md` 一轮一轮地开发 Chamo，另一个身份做独立评审，GitHub Actions 负责三端测试（见 `docs/CI_TESTING.md`）。它不依赖具体的 Agent 工具：只要你的 harness 能"从标准输入读提示词、在当前目录干活、干完退出"，就能接入。
+开发 Agent（例如 DeepSeek 的 harness）跑在群晖 NAS 上的 Docker 容器里，**只有开发能力**：读写代码、用 git 和 gh。测试、评审和隐私把关全部放在 GitHub 上完成。容器里不需要 Python 依赖、LibreOffice 或 macOS。
 
 ## 结构
 
 ```
-chamo-agent（开发）                         chamo-review（评审，另一个 Unix 用户）
-  run_loop.sh 每轮：                          review_prs.sh 每 10 分钟：
-    总开关 → 每日上限 → 连续失败熔断            总开关 → 只看本仓库分支的 PR
-    → HARNESS_CMD < goal.md + round.md         → 受保护路径直接拦下，等维护者
-    → 把本轮报告发到状态 Issue                  → diff 过大 / 隐私命中 拦下
-                                               → REVIEW_CMD 给出结论
-                                               → PR 评论 + 提交状态 agent-review
-GitHub：main 分支保护，必需检查 = CI 全部作业 + agent-review
+群晖容器（开发 Agent）                     GitHub
+  目标模式提示词 prompts/goal.md
+  写代码 → git commit（身份固定 Chamo）
+  git push ──[pre-push 隐私扫描]──────────▶ 分支
+  scripts/ci_remote_test.sh ─────────────▶ test-matrix：任意平台、可重复运行
+  gh pr create ──────────────────────────▶ PR
+                                            ├─ cross-platform → all checks（三端测试、打包、Swift）
+                                            └─ agent-review   → 另一个模型评审 + 服务端隐私/身份检查
+  读评审意见和 CI 日志，修改后再推送          main 分支保护：all checks + agent-review 都通过才能合并
 ```
 
 | 文件 | 作用 |
 | --- | --- |
-| `run_loop.sh` | 开发循环（`--once` 只跑一轮，`DRY_RUN=1` 不访问 GitHub） |
-| `review_prs.sh` | 独立评审，设置 `agent-review` 状态 |
-| `approve_pr.sh` | 维护者在自己电脑上运行：亲自审核后放行被拦下的 PR |
+| `prompts/goal.md` | 目标模式提示词，交给 harness |
+| `prompts/round.md` | 单轮提示词（只在用 `run_loop.sh` 按轮驱动时使用） |
+| `prompts/review.md` | 评审标准，`agent-review` 工作流使用 |
+| `container_init.sh` | 容器启动时运行：固定 git 身份、挂上推送钩子、检查工具与令牌、克隆仓库 |
+| `hooks/pre-push` | 推送前隐私扫描 |
 | `privacy_scan.py` | 隐私扫描：关键词只存哈希，命中只报编号 |
-| `hooks/pre-push` | 推送前扫描，经全局 `core.hooksPath` 生效 |
-| `lib.sh` | 公共函数：配置加载、总开关、发布前扫描 |
-| `prompts/` | 目标、单轮、评审三份提示词 |
-| `config/` | `loop.conf`、两份 `.env` 的模板 |
-| `systemd/` | 开发服务、评审服务与定时器 |
-| `setup_vps.sh` | 初始化服务器（Debian/Ubuntu，root 运行，可重复执行） |
+| `review_llm.py` | 评审工作流调用模型 API 的客户端（OpenAI 兼容接口，默认 DeepSeek） |
+| `run_loop.sh`、`lib.sh` | 可选的按轮驱动：总开关、每日上限、连续失败熔断、单轮超时、往状态 Issue 发报告 |
+| `approve_pr.sh` | 维护者在自己电脑上运行：亲自审核后放行被拦下的 PR |
+| `config/chamo-agent.env.example` | 容器环境变量模板 |
 
 ## 安装步骤
 
-### 1. 在你的 Mac 上准备（不要在 VPS 上输入真实信息）
-
-生成隐私关键词的哈希文件。真实值只在你的 Mac 上出现：
+### 1. 在你的 Mac 上生成隐私关键词（真实值只在 Mac 上出现）
 
 ```bash
 python3 ops/agent-loop/privacy_scan.py hash > private-keywords.txt
@@ -47,23 +46,26 @@ allow:io\.github\.<用户名>\.chamo
 
 本说明里不直接写出这两行，是因为第二行的反斜杠写法本身会被扫描器当作命中。
 
-注意：哈希只能防止意外泄露。手机号这类短值可以被暴力还原，所以这个文件仍然要当成机密保管。
+哈希只能防止意外泄露：手机号这类短值可以被暴力还原，所以这个文件仍要当作机密保管。
 
 ### 2. GitHub 上（需要你本人操作）
 
-1. 建一个状态 Issue（例如"自循环状态"），记下编号。
-2. 新建标签 `agent-stop`（总开关）和 `accepted`（只有带这个标签的 Issue 才会被 Agent 当作任务）。
-3. 建两个细粒度令牌，都只授权 `WangMingCF/chamo` 这一个仓库：
-   - 开发令牌：Contents 读写、Pull requests 读写、Issues 读写、Actions 只读。**不要**给 Commit statuses 和 Administration。
-   - 评审令牌：Commit statuses 读写、Pull requests 读写、Issues 读写、Contents 只读。
-4. 设置 main 分支保护。`enforce_admins` 打开后，你自己也不能绕过；被拦下的 PR 用 `approve_pr.sh` 放行：
+1. **Secrets 和 Variables**（仓库 Settings → Secrets and variables → Actions）：
+   - Secret `PRIVACY_KEYWORDS`：第 1 步生成的文件的全部内容。没有它，评审一律拒绝放行。
+   - Secret `REVIEW_API_KEY`：评审用的模型 API key。
+   - Variable `REVIEW_MODEL`：评审用的模型名。建议与开发 Agent 不同，至少用不同的模式（比如推理模型）。
+   - Variable `REVIEW_API_BASE`（可选）：默认 `https://api.deepseek.com`。
+2. **标签**：`agent-stop`（总开关）和 `accepted`（只有带这个标签的 Issue 才会被当作任务）。再建一个状态 Issue，记下编号。
+3. **开发令牌**（细粒度，只授权这一个仓库）：Contents 读写、Pull requests 读写、Issues 读写、Actions 读写（用来触发 `test-matrix`）。
+   - **不要**给 Commit statuses：这样 Agent 无法自己设置 `agent-review`。
+   - **不要**给 Workflows：这样 Agent 无法修改 CI 和评审工作流。
+   - **不要**给 Administration。
+4. **合并 PR 后设置 main 分支保护**。`enforce_admins` 打开后你自己也不能绕过；被拦下的 PR 用 `approve_pr.sh` 放行：
 
 ```bash
 gh api -X PUT repos/WangMingCF/chamo/branches/main/protection --input - <<'EOF'
 {
-  "required_status_checks": {"strict": true, "contexts": [
-    "engine (ubuntu-latest)", "engine (windows-latest)", "engine (macos-latest)",
-    "linux package", "windows package", "swift (macos-15)", "ops scripts", "agent-review"]},
+  "required_status_checks": {"strict": true, "contexts": ["all checks", "agent-review"]},
   "enforce_admins": true,
   "required_pull_request_reviews": {"required_approving_review_count": 0},
   "restrictions": null,
@@ -73,44 +75,37 @@ gh api -X PUT repos/WangMingCF/chamo/branches/main/protection --input - <<'EOF'
 EOF
 ```
 
-`unit` 工作流要先在 main 上跑过一次，`swift (macos-15)` 和 `ops scripts` 这两个检查名才会出现在 GitHub 里。
+### 3. 群晖上
 
-### 3. 在 VPS 上
-
-```bash
-git clone https://github.com/WangMingCF/chamo.git /root/chamo-src
-sudo bash /root/chamo-src/ops/agent-loop/setup_vps.sh
-```
-
-接着：
-
-1. 编辑 `/etc/chamo-agent/loop.conf`，至少填 `STATUS_ISSUE`。
-2. 填写两份 `.env`：开发用户和评审用户各用各的令牌。`HARNESS_CMD` 和 `REVIEW_CMD` 填你的 harness 的真实命令。
-3. 把第 1 步生成的 `private-keywords.txt` 复制到两个用户的 `~/.config/chamo-agent/` 下，权限设为 600。
-4. 为两个用户分别安装并登录你的 harness。
-5. 试跑与启动：
+1. 在 NAS 上建三个文件夹并挂进容器：
+   - `rails`：把 `ops/agent-loop/` 整个复制进去，**只读**挂载，例如挂到 `/rails`。Agent 改不了自己的规则；规则更新时，由你从 main 重新复制。
+   - `config`：放 `private-keywords.txt`，只读挂载到 `/config`。如果使用 `run_loop.sh`，再单独可写挂载一个子目录 `/config/state`。
+   - `work`：Agent 的工作目录，可写，挂到 `/work`。
+2. 容器里需要 `git`、`python3`（只用标准库）和 `gh`。`gh` 是单个静态二进制文件，镜像里没有的话，可以放进 `rails/bin` 后加入 PATH。
+3. 按 `config/chamo-agent.env.example` 在 Container Manager 里设置环境变量（或用 env_file）。令牌只填在这里。
+4. 容器启动时运行一次：
 
 ```bash
-sudo -u chamo-agent DRY_RUN=1 /opt/chamo-agent/run_loop.sh --once
-sudo -u chamo-review DRY_RUN=1 /opt/chamo-agent/review_prs.sh
-systemctl start chamo-review.timer chamo-agent.service
-journalctl -u chamo-agent -f
+REPO=WangMingCF/chamo WORKDIR=/work/chamo bash /rails/container_init.sh
 ```
+
+5. 把 `/rails/prompts/goal.md` 的内容作为 harness 的目标模式提示词，把 `{{REPO}}`、`{{WORKDIR}}`、`{{RELEASE_MODE}}` 换成实际值。工作目录设为 `/work/chamo`。
+6. 可选：如果 harness 能"从标准输入读提示词、跑完一轮就退出"，可以用 `/rails/run_loop.sh` 按轮驱动，获得每日上限、熔断和状态汇报；否则只用 harness 自带的目标模式。
 
 ## 刹车
 
 | 方式 | 效果 |
 | --- | --- |
-| `touch /etc/chamo-agent/STOP` | 两个循环都停（只有 root 能创建这个文件） |
-| 开一个带 `agent-stop` 标签的 Issue | 同上，可以在手机上操作 |
-| `MAX_ROUNDS_PER_DAY` | 每天最多跑几轮 |
-| `MAX_CONSECUTIVE_FAILURES` | 连续失败达到次数后暂停，并在状态 Issue 里通知；删除 `~/.local/state/chamo-agent/failures` 后恢复 |
-| `ROUND_TIMEOUT` | 单轮超时后强制结束 |
-| 模型平台的消费上限 | 在 DeepSeek 控制台设置每日或每月额度（这套脚本无法统计 API 花费） |
+| 开一个带 `agent-stop` 标签的 Issue | 提示词要求 Agent 立刻停下；`run_loop.sh` 也会检查。手机上就能操作 |
+| 在 NAS 的 `config` 文件夹里放一个 `STOP` 文件 | `run_loop.sh` 停止 |
+| 在群晖上停止容器 | 立即停止 |
+| 在 DeepSeek 控制台设置消费上限 | 控制花费（这套工具无法统计 API 花费） |
+| `run_loop.sh` 的每日上限、熔断、超时 | 见 env 模板 |
 
 ## 已知局限（如实说明）
 
-- **pre-push 钩子挡不住故意绕过**：开发 Agent 和钩子是同一个 Unix 用户，它可以用 `git push --no-verify` 或改仓库级 `core.hooksPath` 来跳过。提示词禁止这样做，评审还会对 PR 再扫描一遍；但推送到分支的那一刻内容就已经公开了。想彻底挡住，需要在服务端做检查（例如 GitHub 的 push ruleset），目前没有实现。
-- **所有令牌都属于同一个 GitHub 账号**：GitHub 不允许账号批准自己的 PR，所以评审结论用提交状态 `agent-review` 表达，不是 GitHub 的 Approve。开发令牌没有 Commit statuses 权限，所以不能自己设置这个状态。
-- **macOS 只能由 CI 验证编译与单测**：界面点击、打包、安装仍要在 Mac 上验收（见 `docs/CI_TESTING.md` 第 4 节）。
-- **状态报告会公开**：报告发布前会扫描隐私关键词和令牌；harness 日志只留在服务器上，从不发布。
+- **pre-push 钩子挡不住故意绕过**：Agent 可以用 `git push --no-verify` 跳过它。提示词禁止这样做。另外 `agent-review` 会在服务端再查一遍 PR 的新增内容、说明和提交身份，有命中就拦下，不让合并；但推送到分支的那一刻内容已经公开了。
+- **所有令牌都属于同一个 GitHub 账号**：GitHub 不允许账号批准自己的 PR，所以评审结论用提交状态 `agent-review` 表达，不是 GitHub 的 Approve。
+- **评审工作流要先合并到 main 才会运行**：它用 `pull_request_target`，总是运行 main 上的版本，所以引入它的这个 PR 本身不会被它评审。
+- **macOS 只验证到编译与单测**：界面点击、打包、安装仍要在 Mac 上验收（见 `docs/CI_TESTING.md` 第 7 节）。
+- **状态报告会公开**：报告发布前会扫描隐私关键词和令牌；harness 日志只留在 NAS 上，从不发布。

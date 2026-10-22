@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # shellcheck source-path=SCRIPTDIR
-# Development loop for one agent on the VPS. Each cycle: check the kill switches
-# and limits, run one bounded round of the harness with the goal prompt, then
-# post the agent's round report to the status issue.
+# Optional driver for the development agent in its container. Use it when the
+# harness can be started once per round from the command line; if the harness
+# runs its own goal-mode loop instead, give it prompts/goal.md and skip this.
+# Each cycle: check the kill switches and limits, run one bounded round of the
+# harness with the goal prompt, then post the round report to the status issue.
 #
 # Usage: run_loop.sh [--once]       DRY_RUN=1 skips every GitHub call.
 set -uo pipefail
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
-load_config agent
+load_config
 : "${HARNESS_CMD:?HARNESS_CMD not set}" "${WORKDIR:?WORKDIR not set}"
 
 ONCE=0; [ "${1:-}" = --once ] && ONCE=1
-STATE=${CHAMO_STATE:-$HOME/.local/state/chamo-agent}
+STATE=${CHAMO_STATE:-/config/state}
 mkdir -p "$STATE/rounds"
 
 pause() { [ "$ONCE" = 1 ] && exit 0; sleep "$1"; }

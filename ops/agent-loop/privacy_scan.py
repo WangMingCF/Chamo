@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Stop the maintainer's private identifiers from reaching anything public.
 
-The keyword file holds only hashes, so the VPS, the agent's context and the
-model provider never see the real values. Hashes stop accidental exposure, not a
+The keyword file holds only hashes, so the agent's container, its context, CI
+and the model provider never see the real values. Hashes stop accidental exposure, not a
 determined attacker: short values such as phone numbers can be brute-forced.
 
 Keyword file format (one entry per line, '#' starts a comment):

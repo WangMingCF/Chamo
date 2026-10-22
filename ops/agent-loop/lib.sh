@@ -1,37 +1,34 @@
 # shellcheck shell=bash
-# Shared helpers for run_loop.sh and review_prs.sh. Sourced, not executed.
+# Shared helpers for run_loop.sh. Sourced, not executed.
 #
-# Configuration comes from two places on purpose:
-#   /etc/chamo-agent/loop.conf          limits and switches, root-owned, read by both users
-#   ~/.config/chamo-agent/<role>.env    this user's secrets (GitHub token, model API key)
-# The scripts themselves are installed root-owned under /opt/chamo-agent, so an agent
-# that edits its own clone cannot loosen the rails that drive it.
+# Everything is configured through environment variables, which is how a Docker
+# container (e.g. on a Synology NAS) passes settings. Optionally CHAMO_ENV names
+# a file of KEY=value lines to load first. Required: REPO, GH_TOKEN.
+# The rails (this folder) should be mounted read-only into the container, so an
+# agent that edits its own clone cannot loosen the scripts that drive it.
 
-CHAMO_CONF=${CHAMO_CONF:-/etc/chamo-agent/loop.conf}
 CHAMO_HOME=${CHAMO_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
 
-load_config() {  # load_config agent|review
-    local role=$1 env_file
-    [ -r "$CHAMO_CONF" ] || { log "missing $CHAMO_CONF"; exit 2; }
-    # shellcheck disable=SC1090
-    . "$CHAMO_CONF"
-    env_file=${CHAMO_ENV:-$HOME/.config/chamo-agent/$role.env}
-    [ -r "$env_file" ] || { log "missing $env_file"; exit 2; }
-    set -a
-    # shellcheck disable=SC1090
-    . "$env_file"
-    set +a
+load_config() {
+    if [ -n "${CHAMO_ENV:-}" ]; then
+        [ -r "$CHAMO_ENV" ] || { log "cannot read $CHAMO_ENV"; exit 2; }
+        set -a
+        # shellcheck disable=SC1090
+        . "$CHAMO_ENV"
+        set +a
+    fi
     : "${REPO:?REPO not set}" "${GH_TOKEN:?GH_TOKEN not set}"
     export GH_TOKEN GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1
 }
 
-# Two kill switches: a file only root can create, and an open issue labelled
-# agent-stop (on a public repository only collaborators can set labels).
+# Two kill switches: a file (create it on the NAS in a folder mounted into the
+# container) and an open issue labelled agent-stop (on a public repository only
+# collaborators can set labels, so strangers cannot stop or start the loop).
 # If GitHub cannot be asked, treat it as "stop for now" rather than run blind.
 stop_requested() {
-    [ -e "${STOP_FILE:-/etc/chamo-agent/STOP}" ] && { log "stop file present"; return 0; }
+    [ -e "${STOP_FILE:-/config/STOP}" ] && { log "stop file present"; return 0; }
     [ "${DRY_RUN:-0}" = 1 ] && return 1
     local open
     if ! open=$(gh issue list -R "$REPO" --label agent-stop --state open --json number -q 'length' 2>/dev/null); then

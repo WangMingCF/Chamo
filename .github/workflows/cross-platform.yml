@@ -4,7 +4,9 @@ name: cross-platform
 # verified by hand; Windows never was, and the defects that only appear there
 # (winerror vs errno, MoveFileExW semantics, reserved names) are exactly the ones
 # that break data-safety promises. This workflow makes that gap impossible to
-# ignore by running the same suite on all three platforms.
+# ignore by running the same suite on all three platforms. The Swift app and
+# the ops tooling are checked here too, so "all checks" covers every job.
+# The full plan for test layers is docs/CI_TESTING.md.
 on:
   push:
     branches: [main]
@@ -32,42 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install engine dependencies
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          # Install the lock file itself. The comment said "same pinned versions the
-          # app ships" while the command asked pip for the newest of everything, so a
-          # dependency could drift away from the artifact between two runs.
-          python -m pip install -r third_party/requirements.lock
-
-      - name: Install LibreOffice (Linux)
-        if: matrix.label == 'linux'
-        run: |
-          sudo apt-get update
-          # libreoffice-common ships /usr/bin/soffice and the real binary under
-          # /usr/lib/libreoffice/program (libreoffice-core only has soffice.bin).
-          sudo apt-get install -y libreoffice-core libreoffice-common libreoffice-impress libreoffice-writer fonts-noto-cjk
-
-      - name: Install LibreOffice (Windows)
-        if: matrix.label == 'windows'
-        shell: pwsh
-        run: |
-          choco install libreoffice-fresh -y --no-progress
-          # The engine looks on PATH and in known install roots; make sure the
-          # freshly installed soffice is reachable for this step.
-          $exe = Get-ChildItem "C:\Program Files\LibreOffice\program\soffice.exe" -ErrorAction SilentlyContinue
-          if (-not $exe) { Write-Error "LibreOffice install did not produce soffice.exe" }
-          Write-Host "found: $($exe.FullName)"
-
-      - name: Install LibreOffice (macOS)
-        if: matrix.label == 'macos'
-        run: |
-          brew install --cask libreoffice
+      - uses: ./.github/actions/setup-engine
 
       - name: Show renderer discovery
         shell: bash
@@ -147,17 +114,29 @@ jobs:
         # goes green regardless. The exit code is asserted explicitly below.
         run: |
           set -o pipefail
-          python -m pytest tests -q -rs -x --tb=short 2>&1 | tee pytest.log
+          python -m pytest tests -q -rs -x --tb=short --junitxml=pytest-results.xml 2>&1 | tee pytest.log
           status=${PIPESTATUS[0]}
           echo "pytest exit: $status"
           exit $status
+
+      - name: Check skips and write the summary
+        # A skip on the platform a test exists for looks like a pass in the exit
+        # code. scripts/ci_report.py fails the job on any skip not registered for
+        # this platform in tests/ci_allowed_skips.json, and writes the job summary.
+        if: always()
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python scripts/ci_report.py --platform ${{ matrix.label }} --skips tests/ci_allowed_skips.json --title "engine (${{ matrix.os }})" pytest-results.xml
 
       - name: Upload test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-${{ matrix.label }}
-          path: pytest.log
+          path: |
+            pytest.log
+            pytest-results.xml
           if-no-files-found: ignore
 
   package:
@@ -280,3 +259,77 @@ jobs:
           path: dist/*.zip
           if-no-files-found: warn
 
+  swift:
+    name: swift (macos-15)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swiftc --version
+
+      - name: Build the app (release and debug-hook variants)
+        # Same sources and frameworks as scripts/build_app.py; -Onone keeps it quick.
+        # The CHAMO_DEBUG variant is built too because the GUI checks depend on it.
+        run: |
+          set -euo pipefail
+          mkdir -p build/ci
+          ui=$(ls Sources/*.swift | grep -v ImageDecode.swift)
+          fw="-framework SwiftUI -framework AppKit -framework PDFKit -framework UniformTypeIdentifiers -framework ImageIO -framework QuickLookThumbnailing -framework Quartz -framework UserNotifications"
+          for flags in "" "-D CHAMO_DEBUG"; do
+            # shellcheck disable=SC2086
+            swiftc -swift-version 5 -parse-as-library -Onone -module-cache-path build/ci/mc \
+              -target arm64-apple-macosx15.0 $flags $ui -o build/ci/Chamo $fw
+            echo "built with flags: [$flags]"
+          done
+          swiftc -module-cache-path build/ci/mc -target arm64-apple-macosx15.0 \
+            Sources/ImageDecode.swift -o build/ci/dwnative -framework ImageIO -framework UniformTypeIdentifiers
+
+      - name: Swift tests
+        run: |
+          set -euo pipefail
+          swiftc -module-cache-path build/ci/mc -parse-as-library \
+            Sources/GitHubFeedback.swift tests/FeedbackTests.swift -o build/ci/feedback-tests
+          build/ci/feedback-tests
+          swiftc -module-cache-path build/ci/mc -parse-as-library \
+            Sources/GitHubFeedback.swift Sources/UpdateCheck.swift tests/UpdateTests.swift -o build/ci/update-tests
+          build/ci/update-tests
+
+  ops:
+    name: ops scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Privacy scan tests
+        run: |
+          python -m pip install pytest==9.1.1
+          python -m pytest ops/agent-loop -q -rs
+
+      - name: Shell scripts
+        run: |
+          shellcheck -x ops/agent-loop/*.sh ops/agent-loop/hooks/pre-push
+          for f in ops/agent-loop/*.sh; do bash -n "$f"; done
+
+  all-checks:
+    name: all checks
+    # The one check branch protection requires. Adding or renaming a job above
+    # then needs no change to the protection rule, and a skipped or cancelled job
+    # counts as a failure here instead of silently not being required.
+    if: always()
+    needs: [engine, package, windows-package, swift, ops]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job must have succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          bad = {k: v["result"] for k, v in json.load(sys.stdin).items() if v["result"] != "success"}
+          print("not successful:", bad) if bad else print("all jobs succeeded")
+          sys.exit(1 if bad else 0)'
