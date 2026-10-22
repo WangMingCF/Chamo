@@ -70,11 +70,13 @@ CASES = {
          "quality": {}},
         # The office fixtures are only worth having if LibreOffice opens them, and
         # the quality check only means something if it sees the rendered words.
+        # Writer and Impress are installed on every engine CI job; Calc is not
+        # (see .github/actions/setup-engine), so the .xlsx case lives in the
+        # representative suite instead of failing the smoke run on Linux for a
+        # reason that has nothing to do with the benchmark.
         {"name": "office-pdf.deck", "operation": "office_pdf", "input": "deck.pptx",
          "config": {}, "quality": {}},
         {"name": "office-pdf.memo", "operation": "office_pdf", "input": "memo.docx",
-         "config": {}, "quality": {}},
-        {"name": "office-pdf.sheet", "operation": "office_pdf", "input": "sheet.xlsx",
          "config": {}, "quality": {}},
         {"name": "engine.cli-start", "kind": "command",
          "argv": [sys.executable, "-I", "-B", str(CHAMO), "--help"]},

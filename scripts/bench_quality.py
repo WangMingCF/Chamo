@@ -43,11 +43,18 @@ MANIFEST_NAME = "清单.json"
 # Both carry the absolute page number, which is what the checks compare against.
 PAGE_FILE = re.compile(r"_(?:page)?(\d+)\.(png|jpe?g|webp|tiff?|bmp)$", re.I)
 
-# Thresholds for "the same picture". A lossless render of the same page decodes
-# to identical pixels, so anything above a rounding difference is a different
-# picture; the values leave room for the decoder's colour handling only.
-SSIM_MIN = 0.995
-MEAN_ABS_MAX = 3.0
+# Thresholds for "the same picture".
+#
+# Identical pixels are the normal case (the same renderer rendering the same page),
+# and that path is byte comparison. These numbers only matter when the pixels are
+# not identical, and they are deliberately strict: a page rendered at half the DPI
+# or a page belonging to another document must not slip through. A global average
+# is not enough for that - a page that is 96% white with a few lines of text can
+# differ everywhere the text is and still average under a grey level or two - so
+# the worst 1/16x1/16 block is checked as well.
+MEAN_ABS_MAX = 1.0        # full-resolution mean of |delta|, in grey levels
+BLOCK_MEAN_MAX = 8.0      # worst block mean of |delta|, in grey levels
+SSIM_MIN = 0.995          # kept for the lossy comparison and for reporting
 
 
 def sha256_file(path: Path) -> str:
@@ -97,7 +104,7 @@ def _grey_pixels(image, sample: int = 96):
         scale = sample / float(max(width, height))
         grey = grey.resize((max(1, int(width * scale)), max(1, int(height * scale))))
         width, height = grey.size
-    return list(grey.getdata()), width, height
+    return list(grey.tobytes()), width, height
 
 
 def _integral(values, width, height):
@@ -187,16 +194,20 @@ def compare_pil(reference, candidate, label: str = "image") -> list:
         return ["%s: size %sx%s, expected %sx%s"
                 % (label, candidate.size[0], candidate.size[1],
                    reference.size[0], reference.size[1])]
-    if reference.mode == candidate.mode and reference.tobytes() == candidate.tobytes():
+    left = reference.convert("RGB")
+    right = candidate.convert("RGB")
+    if left.tobytes() == right.tobytes():
         return []
-    reference = reference.convert("RGB")
-    candidate = candidate.convert("RGB")
-    score = ssim(reference, candidate)
-    difference = mean_abs(reference, candidate)
-    if score < SSIM_MIN or difference > MEAN_ABS_MAX:
-        return ["%s: picture differs (SSIM %.4f < %.4f, mean |delta| %.2f > %.2f)"
-                % (label, score, SSIM_MIN, difference, MEAN_ABS_MAX)]
-    return []
+    from PIL import Image, ImageChops, ImageStat
+
+    difference = ImageChops.difference(left, right).convert("L")
+    average = ImageStat.Stat(difference).mean[0]
+    worst = max(difference.resize((16, 16), Image.BOX).tobytes())
+    if average <= MEAN_ABS_MAX and worst <= BLOCK_MEAN_MAX:
+        return []
+    score = ssim(left, right)
+    return ["%s: picture differs (mean |delta| %.2f (max %.2f), worst block %.0f (max %.0f), SSIM %.4f)"
+            % (label, average, MEAN_ABS_MAX, worst, BLOCK_MEAN_MAX, score)]
 
 
 def compare_with_file(reference, candidate, label: str = "image") -> list:
