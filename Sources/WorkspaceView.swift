@@ -106,7 +106,7 @@ struct DropZone: View {
 
 // MARK: - File table
 
-enum RowFilter: Hashable { case all, failed, done, skipped }
+enum RowFilter: Hashable { case all, failed, cancelled, done, skipped }
 
 struct FileTable: View {
     @EnvironmentObject var m: Workbench
@@ -124,7 +124,11 @@ struct FileTable: View {
     // Mail/Transmit-style status filter, shown once there is something to filter by.
     var showsFilter: Bool { m.items.count > 1 && (m.phase != .idle || m.items.contains { m.incompatibility($0) != nil }) }
     var filterBar: some View {
-        let failed = m.items.filter { $0.status == .failed || $0.status == .cancelled }.count
+        // A cancelled file is not a failure and must not be counted as one: the
+        // run stopped, the sources are intact, and the count is what the user
+        // reads as "how many things went wrong".
+        let failed = m.items.filter { $0.status == .failed }.count
+        let cancelled = m.items.filter { $0.status == .cancelled }.count
         let done = m.items.filter { $0.status == .done || $0.status == .resumed }.count
         let skipped = m.items.filter { $0.status == .ready && m.incompatibility($0) != nil }.count
         return HStack(spacing: 10) {
@@ -132,6 +136,7 @@ struct FileTable: View {
                 Text("全部 \(m.items.count)").tag(RowFilter.all)
                 if done > 0 { Text("完成 \(done)").tag(RowFilter.done) }
                 if failed > 0 { Text("异常 \(failed)").tag(RowFilter.failed) }
+                if cancelled > 0 { Text("已取消 \(cancelled)").tag(RowFilter.cancelled) }
                 if skipped > 0 { Text("不适用 \(skipped)").tag(RowFilter.skipped) }
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize()
@@ -146,7 +151,8 @@ struct FileTable: View {
     var rows: [QueueItem] {
         switch filter {
         case .all: m.items
-        case .failed: m.items.filter { $0.status == .failed || $0.status == .cancelled }
+        case .failed: m.items.filter { $0.status == .failed }
+        case .cancelled: m.items.filter { $0.status == .cancelled }
         case .done: m.items.filter { $0.status == .done || $0.status == .resumed }
         case .skipped: m.items.filter { $0.status == .ready && m.incompatibility($0) != nil }
         }
