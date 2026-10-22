@@ -84,8 +84,11 @@ MANIFEST_NAME = "清单.json"
 SPEEDUP_MIN = 1.5            # gate 3: image-dominant PDF must be >= 1.5x faster
 TEXT_REGRESSION_MAX = 0.05   # gate 2: text PDF must not regress by more than 5%
 # The text gate judges best-of-N per arm and, while over budget, measures more
-# pairs up to this many before deciding (see text_timing_verdict).
-TEXT_MAX_PAIRS = 8
+# pairs up to this many before deciding (see text_timing_verdict). More pairs can
+# only clear a false failure, never pass a real slowdown, so the cap is a cost
+# choice: macos-latest noise comes in streaks of minutes, best-of-8 once failed
+# identical work at 12%, and best-of-14 settled within +-3% on three runners.
+TEXT_MAX_PAIRS = 14
 # The engine reports the gain floor it used in the job report; it is part of the
 # advertised contract ("only shard when predicted gain >= 10%"), so a gate pins
 # it. Review showed the constant could drift from 1.10 down to 1.01 while
@@ -1369,8 +1372,10 @@ def text_timing_verdict(off_times, auto_times):
       * wall time, windows-latest: identical runs took 5.0-13.3 s; a median of
         3 pairs failed main with an 8.7% "regression" and best-of-6 failed a PR
         with 5.1%;
-      * child CPU seconds, macos-latest at load average 13: identical runs used
-        7.7-12.4 s, and a median of 3 pairs failed a PR with 6.8%.
+      * child CPU seconds, macos-latest at load average 7-61: identical runs
+        used 7.7-14.4 s; a median of 3 pairs failed a PR with 6.8%, best-of-8
+        once with 12.1%. 42 interleaved triples on three runners put auto/off
+        at a median of 0.97-1.00, auto slower in 14 of 42 pairs.
     Contention only ever adds time (wall or CPU: cache and SMT contention,
     frequency drops and steal inflate CPU seconds too), so each arm's smallest
     measurement is the tightest bound on its own cost. A real slowdown is in
