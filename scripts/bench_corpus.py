@@ -421,13 +421,16 @@ def image_set(directory: Path, count: int, size=(1600, 1200), dpi: int = 200):
             info = PngImagePlugin.PngInfo()
             info.add_text("Description", "Synthetic RGBA sample %d" % (index + 1))
             png = directory / ("alpha-%02d.png" % (index + 1))
-            rgba.save(png, pnginfo=info, compress_level=1, dpi=(dpi, dpi))
+            # compress_level=0: PNG's IDAT is DEFLATE, and its bytes come from the
+            # zlib the wheel was built against. Measured on CI, the ubuntu runner
+            # produced different PNGs than windows and macOS from the same pixels.
+            rgba.save(png, pnginfo=info, compress_level=0, dpi=(dpi, dpi))
             written.append(png)
         gray = Image.new("L", (width // 2, height // 2), 128 + index)
         draw_gray = ImageDraw.Draw(gray)
         draw_gray.rectangle([0, 0, width // 4, height // 4], fill=20 + index)
         gray_path = directory / ("gray-%02d.png" % (index + 1))
-        gray.save(gray_path, compress_level=1, dpi=(dpi, dpi))
+        gray.save(gray_path, compress_level=0, dpi=(dpi, dpi))  # see the alpha note
         written.append(gray_path)
     return written
 
