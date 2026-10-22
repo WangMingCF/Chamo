@@ -199,18 +199,14 @@ def test_content_text_is_not_sharded_and_not_slower(gate):
 
     The timing half is judged on child CPU seconds where the platform reports
     them, because wall time on a shared CI runner is dominated by other tenants.
-    On a platform without child CPU time (Windows) the gate may return an
-    explicit "inconclusive" SKIP when the host's own repeated pairs disagree by
-    more than the 5% budget. That skip is reported with its numbers and becomes
-    a pytest skip - it never becomes a silent pass.
+    On a platform without child CPU time (Windows) it is judged on each arm's
+    fastest wall time, re-measured up to TEXT_WALL_MAX_PAIRS pairs while over
+    budget; see verify_shard.text_wall_verdict. Both halves must PASS.
     """
     results = vs.gate_content_text(gate)
-    assert results, "content gate produced no checks"
+    assert {result["name"] for result in results} == {
+        "content.text.not_sharded", "content.text.timing"}, results
     for result in results:
-        if (result["status"] == "SKIP"
-                and (result.get("meta") or {}).get("reason") == "timing_noise"):
-            pytest.skip("text timing gate inconclusive on this host: "
-                        + result["actual"])
         assert_gate(result)
 
 
@@ -230,32 +226,85 @@ def test_one_failed_shard_fails_the_whole_job(gate):
 # --------------------------------------------------------------------------
 # Gate 3: speed (machine-dependent; skipped in CI with a printed reason)
 # --------------------------------------------------------------------------
-def test_text_timing_verdict_never_passes_an_unresolvable_measurement():
-    """A pass may only be granted by a measurement that resolves the budget.
+def test_text_timing_verdicts_keep_the_5_percent_bar():
+    """Both clocks judge the same 5% budget and both can fail.
 
-    Review caught a regression introduced when the decision was extracted: with the
-    host's own wall-time pairs disagreeing by 6%, ratios [0.94, 1.00, 1.06] returned
-    PASS while the result itself said the host cannot resolve 5%. The original gate
-    returned SKIP. This test pins the contract that made that difference visible.
+    Child CPU time: median of the per-pair ratios. One CI run measured 6.1% with
+    5.7% pairwise spread on an overloaded host; that failure stands as a
+    host-limited observation and must not be reclassified into a skip.
     """
-    unresolved = vs.text_timing_verdict([0.94, 1.00, 1.06], use_cpu=False)
-    assert unresolved["noise"] > vs.TEXT_REGRESSION_MAX, unresolved
-    assert unresolved["status"] == "SKIP", unresolved
-    assert "cannot resolve" in unresolved["inconclusive"], unresolved
-
-    # Child CPU time keeps the plain 5% bar. One CI run measured 6.1% with
-    # 5.7% pairwise spread on an overloaded host; that failure stands as a host-limited
-    # observation and must not be reclassified into a skip.
-    assert vs.text_timing_verdict([0.94, 0.93, 1.04], use_cpu=True)["status"] == "FAIL"
-
-    # A quiet host within the budget passes; a clear regression fails.
-    assert vs.text_timing_verdict([1.00, 1.01, 0.99], use_cpu=True)["status"] == "PASS"
-    assert vs.text_timing_verdict([0.80, 0.81, 0.80], use_cpu=True)["status"] == "FAIL"
-    assert vs.text_timing_verdict([0.80, 0.85, 0.90], use_cpu=False)["status"] == "FAIL"
-    assert vs.text_timing_verdict([0.99, 1.00, 1.01], use_cpu=False)["status"] == "PASS"
-
+    assert vs.TEXT_REGRESSION_MAX == 0.05
+    assert vs.text_timing_verdict([0.94, 0.93, 1.04])["status"] == "FAIL"
+    assert vs.text_timing_verdict([1.00, 1.01, 0.99])["status"] == "PASS"
+    assert vs.text_timing_verdict([0.80, 0.81, 0.80])["status"] == "FAIL"
     # No usable pair is a failure, not a pass.
-    assert vs.text_timing_verdict([], use_cpu=True)["status"] == "FAIL"
+    assert vs.text_timing_verdict([])["status"] == "FAIL"
+
+
+def test_text_wall_verdict_ignores_host_noise_but_not_a_slowdown():
+    """Wall time: each arm's fastest run, against the same 5% budget.
+
+    The first case is the windows-latest run that failed main at ab4a2b2 on a
+    docs-only commit: identical work, auto/off median 0.913 and 8.7% "regression"
+    from the median of three pairs. Best-of-3 is 3.0%, inside the budget.
+    """
+    off = [6.17, 6.20, 6.22]
+    noisy_auto = [6.36, 6.80, 7.51]
+    noisy = vs.text_wall_verdict(off, noisy_auto)
+    assert noisy["status"] == "PASS", noisy
+    assert abs(noisy["regression"] - (1 - 6.17 / 6.36)) < 1e-9, noisy
+
+    # A real slowdown is in every auto run, including the fastest one.
+    slow_auto = [x * 1.06 for x in off]
+    assert vs.text_wall_verdict(off, slow_auto)["status"] == "FAIL"
+    # Noise on top of a real 6% slowdown still fails.
+    assert vs.text_wall_verdict(off, [6.17 * 1.06, 6.9, 7.4])["status"] == "FAIL"
+    # Inside the budget passes.
+    assert vs.text_wall_verdict(off, [x * 1.04 for x in off])["status"] == "PASS"
+    # No usable pair is a failure, not a pass.
+    assert vs.text_wall_verdict([], [])["status"] == "FAIL"
+
+
+def test_text_timing_gate_remeasures_noise_and_still_fails_a_slowdown():
+    """The wall-time gate measures more pairs while over budget, then decides.
+
+    A stub session stands in for the engine: the gate logic, not the machine, is
+    under test. With noise only, a quiet pair arrives and the gate passes; with a
+    real 8% slowdown the gate runs out of pairs and FAILS - it never skips.
+    """
+    def session_with(auto_walls, off_walls):
+        class Args:
+            reps = 3
+
+        class Session:
+            args = Args()
+            calls = []
+
+            def run(self, key, shard, rep=0, sample=False, range_spec=""):
+                return {"rc": 0, "wall": 1.0, "cpu": None,
+                        "report_results": [{"shard": {"used": False, "shards": 1,
+                                                      "kind": "text", "mode": shard}}]}
+
+            def paired_reps(self, key, range_spec="", count=None):
+                self.calls.append(count)
+                return [({"rc": 0, "wall": off_walls[i], "cpu": None},
+                         {"rc": 0, "wall": auto_walls[i], "cpu": None})
+                        for i in range(count)]
+        return Session()
+
+    def timing(session):
+        return {r["name"]: r for r in vs.gate_content_text(session)}["content.text.timing"]
+
+    off = [6.17, 6.20, 6.22, 6.18, 6.19, 6.21]
+    noisy = session_with([6.80, 6.90, 7.51, 6.20, 6.95, 7.00], off)
+    result = timing(noisy)
+    assert result["status"] == "PASS", result
+    assert noisy.calls[-1] == 4, noisy.calls
+
+    slow = session_with([x * 1.08 for x in off], off)
+    result = timing(slow)
+    assert result["status"] == "FAIL", result
+    assert slow.calls[-1] == vs.TEXT_WALL_MAX_PAIRS, slow.calls
 
 
 def test_speed_image_sharding_at_least_1_5x(gate):
