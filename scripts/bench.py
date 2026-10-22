@@ -52,6 +52,19 @@ CHAMO = ROOT / "engine" / "chamo.py"
 
 SCHEMA = 1
 
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# Loaded before the case table, because the case names come from the corpus specs:
+# importing these later made the module fail to import at all.
+quality = load_module("chamo_bench_quality", ROOT / "scripts" / "bench_quality.py")
+corpus_builder = load_module("chamo_bench_corpus", ROOT / "scripts" / "bench_corpus.py")
+
+
 # Each case is one operation on one corpus item. "quality" carries the options of
 # the check in scripts/bench_quality.py that has to pass before the timing counts.
 def cases_for(suite: str) -> list:
@@ -123,17 +136,6 @@ def cases_for(suite: str) -> list:
 
 
 CASES = {name: cases_for(name) for name in corpus_builder.SUITES}
-
-
-def load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-quality = load_module("chamo_bench_quality", ROOT / "scripts" / "bench_quality.py")
-corpus_builder = load_module("chamo_bench_corpus", ROOT / "scripts" / "bench_corpus.py")
 
 
 def sha256_text(text: str) -> str:
