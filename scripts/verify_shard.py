@@ -545,11 +545,10 @@ def run_engine(engine: Path, pdf: Path, out_dir: Path, config: dict,
     # rep reads it back, and the timing comparison stops measuring what it claims
     # to measure. This suite measures rendering, not resume, so it opts out.
     environment.setdefault("CHAMO_PAGE_CACHE", "0")
-    cpu_started = _children_cpu()
     started = time.monotonic()
-    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                            errors="replace", env=environment, **start_kwargs)
+    proc, tree_cpu = start_measured(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                    errors="replace", env=environment, **start_kwargs)
     sampler = DescendantSampler(proc.pid) if sample else None
     if sampler:
         sampler.start()
@@ -562,7 +561,7 @@ def run_engine(engine: Path, pdf: Path, out_dir: Path, config: dict,
         stdout, stderr = "", ""
     finally:
         wall = time.monotonic() - started
-        cpu_finished = _children_cpu()
+        cpu = tree_cpu()
         if sampler:
             sampler.stop()
             sampler.join(timeout=5)
@@ -584,8 +583,7 @@ def run_engine(engine: Path, pdf: Path, out_dir: Path, config: dict,
         # CPU seconds spent by the engine and everything it spawned. Timing gates
         # prefer this over wall time because wall time on a shared runner measures
         # the host's other tenants too; None means the platform cannot report it.
-        "cpu": (None if cpu_started is None or cpu_finished is None
-                else max(0.0, cpu_finished - cpu_started)),
+        "cpu": cpu,
         "timed_out": timed_out,
         "events": events,
         "fatal": _fatal_of(events),
@@ -835,8 +833,8 @@ def _children_cpu() -> float | None:
     is doing: a macOS GitHub runner at load average 28 turned two identical runs
     into a reported 9% "regression" (per-pair ratios 0.67/0.91/1.07). Child CPU
     time is not inflated by other tenants, so a 5% budget can actually be
-    resolved there. Windows has no RUSAGE_CHILDREN, so callers fall back to wall
-    time and must then decide whether the host can resolve the budget at all.
+    resolved there. Windows has no RUSAGE_CHILDREN; start_measured() reads the
+    same number there from a Job Object.
     """
     resource = _RESOURCE
     if resource is None:
@@ -846,6 +844,129 @@ def _children_cpu() -> float | None:
     except (OSError, ValueError):
         return None
     return float(usage.ru_utime) + float(usage.ru_stime)
+
+
+def start_measured(command, **popen_kwargs):
+    """Start a command; return (proc, read) where read() is its tree's CPU seconds.
+
+    read() is called after the process has exited and returns None when the
+    platform cannot say. POSIX: RUSAGE_CHILDREN, which includes every descendant
+    its parent reaped (the supervisor reaps its workers). Windows: the process
+    starts suspended inside a fresh Job Object, so nothing it spawns can run
+    before it is accounted; the job keeps the user+kernel time of every member
+    after it exits, and a worker the engine puts in its own job is nested inside
+    this one, so its time is counted too. A windows-latest runner gave wall times
+    of 5.0-13.3 s for identical runs, which no wall-time estimator can judge
+    against a 5% budget.
+    """
+    if os.name != "nt":
+        before = _children_cpu()
+
+        def read():
+            after = _children_cpu()
+            return None if before is None or after is None else max(0.0, after - before)
+        return subprocess.Popen(command, **popen_kwargs), read
+    job = _WindowsJobCpu.create()
+    if job is None:
+        return subprocess.Popen(command, **popen_kwargs), lambda: None
+    flags = popen_kwargs.pop("creationflags", 0) | _WindowsJobCpu.CREATE_SUSPENDED
+    try:
+        proc = subprocess.Popen(command, creationflags=flags, **popen_kwargs)
+    except BaseException:
+        job.close()
+        raise
+    assigned = job.assign(proc)
+    if not job.resume(proc):
+        job.close()
+        proc.kill()
+        proc.wait()
+        raise OSError("could not resume the suspended engine process")
+    if not assigned:
+        job.close()
+        return proc, lambda: None
+
+    def read():
+        try:
+            return job.seconds()
+        finally:
+            job.close()
+    return proc, read
+
+
+class _WindowsJobCpu:
+    """A Job Object used only for CPU accounting (no limits, no kill-on-close)."""
+
+    CREATE_SUSPENDED = 0x00000004
+    JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+
+    def __init__(self, handle):
+        self.handle = handle
+
+    @staticmethod
+    def _api():
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.AssignProcessToJobObject.restype = wintypes.BOOL
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.QueryInformationJobObject.restype = wintypes.BOOL
+        k32.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
+        k32.CloseHandle.restype = wintypes.BOOL
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        return k32, ntdll
+
+    @classmethod
+    def create(cls):
+        try:
+            k32, _ntdll = cls._api()
+            handle = k32.CreateJobObjectW(None, None)
+        except (OSError, AttributeError):
+            return None
+        return cls(handle) if handle else None
+
+    def assign(self, proc) -> bool:
+        from ctypes import wintypes
+        k32, _ntdll = self._api()
+        return bool(k32.AssignProcessToJobObject(self.handle,
+                                                 wintypes.HANDLE(int(proc._handle))))
+
+    def resume(self, proc) -> bool:
+        from ctypes import wintypes
+        _k32, ntdll = self._api()
+        return ntdll.NtResumeProcess(wintypes.HANDLE(int(proc._handle))) >= 0
+
+    def seconds(self):
+        import ctypes
+
+        class _Accounting(ctypes.Structure):
+            _fields_ = [("TotalUserTime", ctypes.c_longlong),
+                        ("TotalKernelTime", ctypes.c_longlong),
+                        ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+                        ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+                        ("TotalPageFaultCount", ctypes.c_ulong),
+                        ("TotalProcesses", ctypes.c_ulong),
+                        ("ActiveProcesses", ctypes.c_ulong),
+                        ("TotalTerminatedProcesses", ctypes.c_ulong)]
+        k32, _ntdll = self._api()
+        info = _Accounting()
+        if not k32.QueryInformationJobObject(self.handle,
+                                             self.JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+                                             ctypes.byref(info), ctypes.sizeof(info), None):
+            return None
+        # 100-ns units.
+        return (info.TotalUserTime + info.TotalKernelTime) / 1e7
+
+    def close(self):
+        if self.handle:
+            k32, _ntdll = self._api()
+            k32.CloseHandle(self.handle)
+            self.handle = None
 
 
 # --------------------------------------------------------------------------
@@ -1330,12 +1451,14 @@ def gate_content_text(session: GateSession, reps=None) -> list:
     # Which clock: on a shared CI host wall time mostly measures other tenants.
     # A macOS runner at load average 28 produced per-pair ratios 0.67/0.91/1.07
     # for two arms that do the same work, i.e. a 9% "regression" out of noise.
-    # Child CPU seconds are not inflated by neighbours, so where the platform
-    # reports them (POSIX) the gate judges the median CPU ratio against 5%.
-    # Where it does not (Windows) the gate judges wall time on best-of-N (see
-    # text_wall_verdict) against the same 5%. Over budget, it measures more pairs,
-    # up to TEXT_WALL_MAX_PAIRS, before deciding: a quiet run can only show up by
-    # measuring again, and a real slowdown is in every run, so it still FAILS.
+    # Child CPU seconds are not inflated by neighbours, so the gate judges the
+    # median CPU ratio against 5%. Every CI platform reports them: POSIX through
+    # RUSAGE_CHILDREN, Windows through Job Object accounting (start_measured).
+    # Wall time is only a fallback for a host that reports no CPU time: best-of-N
+    # (see text_wall_verdict) against the same 5%, re-measured up to
+    # TEXT_WALL_MAX_PAIRS pairs while over budget. It is not enough on a busy
+    # runner: windows-latest once gave walls of 5.0-13.3 s for identical runs and
+    # a 5.1% best-of-6 "regression", which is why Windows now measures CPU.
     count = max(1, int(reps if reps is not None else session.args.reps))
     while True:
         pairs = session.paired_reps("text", count=count)
