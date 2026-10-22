@@ -115,12 +115,12 @@ def test_pdf_to_images_end_to_end(work):
 
 
 def test_the_narrowest_window_shows_every_column(work):
-    """1024 points is the window minimum, and the GitHub runner's width.
+    """The GitHub runner's window is 1024 points wide; that is the width checked here.
 
-    At that width the "大小" column used to be cut off and a horizontal scrollbar
-    appeared, so the file list could not be read in one glance. The screenshot is
-    the evidence: compared with a baseline, a layout regression becomes a picture
-    difference instead of a report nobody checks.
+    1024 is not the window minimum (that is 980), it is the width CI uses and the
+    width at which the "大小" column used to be cut off with a horizontal
+    scrollbar. The screenshot is the evidence: compared with a baseline, a layout
+    regression becomes a picture difference instead of a report nobody checks.
     """
     pdf = make_pdf(work / "in" / "讲义.pdf", 3)
     out = run(work, "narrow", [
@@ -131,7 +131,9 @@ def test_the_narrowest_window_shows_every_column(work):
         {"sleep": 1}, {"snapshot": "narrow-window"}])
     shot = out / "narrow-window.png"
     assert shot.is_file(), "the scenario produced no screenshot"
-    visual.compare(shot, "macos-narrow-window")
+    # The baseline folder already carries the platform; the name stays unprefixed
+    # like the other scenarios (home-light, pdf-images-ready).
+    visual.compare(shot, "narrow-window")
 
 
 def test_a_broken_file_fails_alone_and_says_why(work):

@@ -180,10 +180,17 @@ import Quartz
         // allows: the narrow-window checks are about what the layout does at 1024
         // points, not about the runner's default.
         if let size = s["resize"] as? [String: Any],
-           let width = size["width"] as? Double, let height = size["height"] as? Double {
-            if let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first {
-                window.setContentSize(NSSize(width: width, height: height))
+           let width = (size["width"] as? NSNumber)?.doubleValue,
+           let height = (size["height"] as? NSNumber)?.doubleValue {
+            // The main window, not "the first visible one": a status-bar panel is
+            // also in NSApp.windows and also visible, and resizing it would leave
+            // the test looking at the runner's default size while claiming 1024.
+            guard let window = NSApp.mainWindow ?? NSApp.keyWindow
+                    ?? NSApp.windows.first(where: { $0.contentView != nil && $0.canBecomeMain }) else {
+                finish(dir, ok: false, step: i, error: "resize: no main window to resize")
+                return
             }
+            window.setContentSize(NSSize(width: width, height: height))
             next(0.6); return
         }
         if s["start"] != nil { m.start(); next(0.2); return }
