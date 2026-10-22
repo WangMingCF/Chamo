@@ -324,8 +324,8 @@ def test_text_timing_gate_remeasures_noise_and_still_fails_a_slowdown(clock):
     def timing(session):
         return {r["name"]: r for r in vs.gate_content_text(session)}["content.text.timing"]
 
-    off = [6.17, 6.20, 6.22, 6.18, 6.19, 6.21, 6.20, 6.18]
-    noisy = session_with(off, [6.80, 6.90, 7.51, 6.20, 6.95, 7.00, 7.10, 6.90])
+    off = [6.17, 6.20, 6.22, 6.18, 6.19, 6.21, 6.20] * 2
+    noisy = session_with(off, [6.80, 6.90, 7.51, 6.20, 6.95, 7.00, 7.10] * 2)
     result = timing(noisy)
     assert result["status"] == "PASS", result
     assert noisy.calls[-1] == 4, noisy.calls
