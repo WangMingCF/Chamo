@@ -225,13 +225,18 @@ def compare_pil(reference, candidate, label: str = "image") -> list:
         return []
     from PIL import Image, ImageChops, ImageStat
 
-    difference = ImageChops.difference(left, right).convert("L")
-    average = ImageStat.Stat(difference).mean[0]
-    worst = max(difference.resize((16, 16), Image.BOX).tobytes())
+    # Per channel, not on a greyscale copy: luma weights red at 0.299 and blue at
+    # 0.114, so a blue shift of 8.8 grey levels passes a 1.0 mean threshold even
+    # though the blue channel moved by nearly 9 - the printed number would be about
+    # nine times looser than the picture change it is supposed to catch. The worst
+    # channel decides.
+    channels = ImageChops.difference(left, right).split()
+    average = max(ImageStat.Stat(channel).mean[0] for channel in channels)
+    worst = max(max(channel.resize((16, 16), Image.BOX).tobytes()) for channel in channels)
     if average <= MEAN_ABS_MAX and worst <= BLOCK_MEAN_MAX:
         return []
     score = ssim(left, right)
-    return ["%s: picture differs (mean |delta| %.2f (max %.2f), worst block %.0f (max %.0f), SSIM %.4f)"
+    return ["%s: picture differs (worst channel mean |delta| %.2f (max %.2f), worst block %.0f (max %.0f), SSIM %.4f)"
             % (label, average, MEAN_ABS_MAX, worst, BLOCK_MEAN_MAX, score)]
 
 
@@ -413,7 +418,13 @@ def check_image_pairs(pairs, mode: str = "lossless", lossy_target: bool = False)
                 if left.mode != right.mode:
                     issues.append("%s: mode changed %s -> %s" % (source.name, left.mode, right.mode))
                     continue
-                if left.tobytes() != right.tobytes():
+                # A palette image's bytes are palette indices: two files with the
+                # same indices and different palettes look nothing alike but compare
+                # equal, so the pixel comparison is made on real colours.
+                palette = left.mode in ("P", "PA") or right.mode in ("P", "PA")
+                left_pixels = left.convert("RGBA").tobytes() if palette else left.tobytes()
+                right_pixels = right.convert("RGBA").tobytes() if palette else right.tobytes()
+                if left_pixels != right_pixels:
                     issues.append("%s: pixels are not identical (lossless work must not change them)"
                                   % source.name)
                 # Metadata is part of "lossless": a PNG text chunk the source
