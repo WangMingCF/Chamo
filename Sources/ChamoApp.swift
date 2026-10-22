@@ -252,66 +252,103 @@ struct HistoryRow: View {
 
 struct SettingsView: View {
     @EnvironmentObject var m: Workbench
+    // The setting itself is the state: reading it here is what redraws the window
+    // the moment the picker changes, instead of on the next open.
+    @AppStorage(L10n.defaultsKey) private var languageRaw: String = AppLanguage.followSystem.rawValue
+    private var lang: String { (AppLanguage(rawValue: languageRaw) ?? .followSystem).resolved }
+
     var body: some View {
         TabView {
             Form {
                 Section {
-                    LabeledContent("默认输出位置") {
+                    LabeledContent {
+                        Picker("", selection: $languageRaw) {
+                            ForEach(AppLanguage.allCases) { choice in
+                                Text(choice.title(lang)).tag(choice.rawValue)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    } label: {
+                        Text(L10n.text("settings.language", lang))
+                    }
+                } footer: {
+                    Text(L10n.text("settings.language.note", lang)).font(.caption).foregroundStyle(.secondary)
+                }
+                Section {
+                    LabeledContent {
                         HStack {
                             Text(m.output.replacingOccurrences(of: NSHomeDirectory(), with: "~")).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                            Button("更改…") { m.chooseOutput() }
+                            Button(L10n.text("settings.change", lang)) { m.chooseOutput() }
+                        }
+                    } label: {
+                        Text(L10n.text("settings.outputLocation", lang))
+                    }
+                    Picker(L10n.text("settings.workers", lang), selection: $m.workers) {
+                        Text(L10n.text("settings.workers.auto", lang, ["count": "\(Workbench.autoWorkers)"])).tag(0)
+                        Divider()
+                        ForEach(1...8, id: \.self) {
+                            Text(L10n.text("settings.workers.count", lang, ["count": "\($0)"])).tag($0)
                         }
                     }
-                    Picker("同时处理", selection: $m.workers) {
-                        Text("自动（\(Workbench.autoWorkers) 个）").tag(0)
-                        Divider()
-                        ForEach(1...8, id: \.self) { Text("\($0) 个文件").tag($0) }
+                    Toggle(L10n.text("settings.revealWhenDone", lang), isOn: $m.openWhenDone)
+                    Picker(L10n.text("settings.saveLocation", lang), selection: $m.besideSource) {
+                        Text(L10n.text("settings.saveLocation.fixedFolder", lang)).tag(false)
+                        Text(L10n.text("settings.saveLocation.besideSource", lang)).tag(true)
                     }
-                    Toggle("完成后在 Finder 中显示结果", isOn: $m.openWhenDone)
-                    Picker("默认保存位置", selection: $m.besideSource) {
-                        Text("固定文件夹").tag(false); Text("原文件旁").tag(true)
-                    }
-                    Picker("输出命名", selection: $m.cleanNaming) {
-                        Text("简洁（讲义_001.png）").tag(true); Text("带任务标识").tag(false)
+                    Picker(L10n.text("settings.naming", lang), selection: $m.cleanNaming) {
+                        Text(L10n.text("settings.naming.clean", lang)).tag(true)
+                        Text(L10n.text("settings.naming.tagged", lang)).tag(false)
                     }
                     HStack {
-                        Toggle("启动时自动检查更新", isOn: $m.autoCheckUpdates)
+                        Toggle(L10n.text("settings.autoUpdate", lang), isOn: $m.autoCheckUpdates)
                         Spacer()
-                        Button(m.checkingUpdate ? "检查中…" : "立即检查") { m.checkForUpdates(manual: true) }.disabled(m.checkingUpdate)
+                        Button(m.checkingUpdate ? L10n.text("settings.checking", lang)
+                                                : L10n.text("settings.checkNow", lang)) {
+                            m.checkForUpdates(manual: true)
+                        }.disabled(m.checkingUpdate)
                     }
                 } footer: {
-                    Text("自动会按本机 CPU 核心数选择；Office 转换最多同时 3 个。输出盘可用空间低于 2 GB 时自动暂停。检查更新只向 GitHub 查询最新版本号，不发送任何文件或使用数据；自动检查默认关闭，开启后每天最多一次。").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.text("settings.generalFooter", lang)).font(.caption).foregroundStyle(.secondary)
                 }
-                Section { Button("保存为默认") { m.savePreset() } }
+                Section { Button(L10n.text("settings.savePreset", lang)) { m.savePreset() } }
             }
             .formStyle(.grouped).disabled(m.running)
-            .tabItem { Label("通用", systemImage: "gearshape") }
+            .tabItem { Label(L10n.text("tab.general", lang), systemImage: "gearshape") }
 
             Form {
                 Section {
-                    TextField("仓库地址", text: $m.githubRepository, prompt: Text("https://github.com/账号/仓库"))
-                    HStack { Button("保存") { m.saveRepository() }; Spacer(); Button("打开反馈窗口") { m.showFeedback = true } }
-                } header: { Text("GitHub 反馈仓库") } footer: {
-                    Text("反馈会在浏览器中打开 GitHub 预填表单，由你检查后提交；应用不保存令牌，不自动上传文件或日志。").font(.caption).foregroundStyle(.secondary)
+                    TextField(L10n.text("feedback.repository", lang), text: $m.githubRepository,
+                              prompt: Text(L10n.text("feedback.repositoryPlaceholder", lang)))
+                    HStack {
+                        Button(L10n.text("common.save", lang)) { m.saveRepository() }
+                        Spacer()
+                        Button(L10n.text("feedback.openWindow", lang)) { m.showFeedback = true }
+                    }
+                } header: { Text(L10n.text("feedback.sectionTitle", lang)) } footer: {
+                    Text(L10n.text("feedback.footer", lang)).font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label("反馈", systemImage: "bubble.left.and.text.bubble.right") }
+            .tabItem { Label(L10n.text("tab.feedback", lang), systemImage: "bubble.left.and.text.bubble.right") }
 
             Form {
                 Section {
-                    LabeledContent("版本", value: "\(m.version) · Apple Silicon")
-                    LabeledContent("处理方式", value: "完全本机，不上传文件")
-                    LabeledContent("签名", value: "未经 Apple 公证")
+                    LabeledContent { Text("\(m.version) · Apple Silicon") }
+                        label: { Text(L10n.text("about.version", lang)) }
+                    LabeledContent { Text(L10n.text("about.processingValue", lang)) }
+                        label: { Text(L10n.text("about.processing", lang)) }
+                    LabeledContent { Text(L10n.text("about.signingValue", lang)) }
+                        label: { Text(L10n.text("about.signing", lang)) }
                 } footer: {
-                    Text("内置 LibreOffice、独立 Python 与开源转换组件，各自保留原许可证。OCR、PDF 转可编辑 Office、音视频处理属于后续规划。").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.text("about.footer", lang)).font(.caption).foregroundStyle(.secondary)
                 }
-                Section { Button("打开使用说明与许可证") { m.reveal(Bundle.main.resourceURL!.appendingPathComponent("Documentation").path) } }
+                Section { Button(L10n.text("about.openDocs", lang)) { m.reveal(Bundle.main.resourceURL!.appendingPathComponent("Documentation").path) } }
             }
             .formStyle(.grouped)
-            .tabItem { Label("关于", systemImage: "info.circle") }
+            .tabItem { Label(L10n.text("tab.about", lang), systemImage: "info.circle") }
         }
-        .frame(width: 520, height: 340)
+        .frame(width: 520, height: 400)
     }
 }
 

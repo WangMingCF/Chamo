@@ -1,0 +1,154 @@
+{
+  "schema": 1,
+  "defaultLanguage": "zh-Hans",
+  "languages": {
+    "zh-Hans": "简体中文",
+    "en": "English"
+  },
+  "strings": {
+    "tab.general": {
+      "zh-Hans": "通用",
+      "en": "General"
+    },
+    "tab.feedback": {
+      "zh-Hans": "反馈",
+      "en": "Feedback"
+    },
+    "tab.about": {
+      "zh-Hans": "关于",
+      "en": "About"
+    },
+    "settings.language": {
+      "zh-Hans": "语言",
+      "en": "Language"
+    },
+    "settings.language.system": {
+      "zh-Hans": "跟随系统",
+      "en": "Follow System"
+    },
+    "settings.language.note": {
+      "zh-Hans": "语言设置目前覆盖设置窗口本身；主窗口与转换提示仍为中文，会在后续版本逐步切换。",
+      "en": "This language setting covers the Settings window itself. The main window and conversion messages are still Chinese; they will follow in a later version."
+    },
+    "settings.outputLocation": {
+      "zh-Hans": "默认输出位置",
+      "en": "Default Output Location"
+    },
+    "settings.change": {
+      "zh-Hans": "更改…",
+      "en": "Change…"
+    },
+    "settings.workers": {
+      "zh-Hans": "同时处理",
+      "en": "Concurrent Files"
+    },
+    "settings.workers.auto": {
+      "zh-Hans": "自动（{count} 个）",
+      "en": "Automatic ({count})"
+    },
+    "settings.workers.count": {
+      "zh-Hans": "{count} 个文件",
+      "en": "{count} files"
+    },
+    "settings.revealWhenDone": {
+      "zh-Hans": "完成后在 Finder 中显示结果",
+      "en": "Show Results in Finder When Done"
+    },
+    "settings.saveLocation": {
+      "zh-Hans": "默认保存位置",
+      "en": "Default Save Location"
+    },
+    "settings.saveLocation.fixedFolder": {
+      "zh-Hans": "固定文件夹",
+      "en": "The Chosen Folder"
+    },
+    "settings.saveLocation.besideSource": {
+      "zh-Hans": "原文件旁",
+      "en": "Next to the Original"
+    },
+    "settings.naming": {
+      "zh-Hans": "输出命名",
+      "en": "Output Naming"
+    },
+    "settings.naming.clean": {
+      "zh-Hans": "简洁（讲义_001.png）",
+      "en": "Plain (handout_001.png)"
+    },
+    "settings.naming.tagged": {
+      "zh-Hans": "带任务标识",
+      "en": "With a Job Tag"
+    },
+    "settings.autoUpdate": {
+      "zh-Hans": "启动时自动检查更新",
+      "en": "Check for Updates at Launch"
+    },
+    "settings.checking": {
+      "zh-Hans": "检查中…",
+      "en": "Checking…"
+    },
+    "settings.checkNow": {
+      "zh-Hans": "立即检查",
+      "en": "Check Now"
+    },
+    "settings.generalFooter": {
+      "zh-Hans": "自动会按本机 CPU 核心数选择；Office 转换最多同时 3 个。输出盘可用空间低于 2 GB 时自动暂停。检查更新只向 GitHub 查询最新版本号，不发送任何文件或使用数据；自动检查默认关闭，开启后每天最多一次。",
+      "en": "Automatic picks a number from this machine's CPU cores; Office conversions run at most 3 at a time. A conversion pauses when the output disk has less than 2 GB free. Update checks ask GitHub for the latest version number only and send no files or usage data; the automatic check is off by default and runs at most once a day when enabled."
+    },
+    "settings.savePreset": {
+      "zh-Hans": "保存为默认",
+      "en": "Save as Default"
+    },
+    "feedback.repository": {
+      "zh-Hans": "仓库地址",
+      "en": "Repository URL"
+    },
+    "feedback.repositoryPlaceholder": {
+      "zh-Hans": "https://github.com/账号/仓库",
+      "en": "https://github.com/account/repository"
+    },
+    "common.save": {
+      "zh-Hans": "保存",
+      "en": "Save"
+    },
+    "feedback.openWindow": {
+      "zh-Hans": "打开反馈窗口",
+      "en": "Open Feedback Window"
+    },
+    "feedback.sectionTitle": {
+      "zh-Hans": "GitHub 反馈仓库",
+      "en": "GitHub Feedback Repository"
+    },
+    "feedback.footer": {
+      "zh-Hans": "反馈会在浏览器中打开 GitHub 预填表单，由你检查后提交；应用不保存令牌，不自动上传文件或日志。",
+      "en": "Feedback opens a pre-filled GitHub form in your browser, and you check it before submitting. The app stores no token and never uploads files or logs on its own."
+    },
+    "about.version": {
+      "zh-Hans": "版本",
+      "en": "Version"
+    },
+    "about.processing": {
+      "zh-Hans": "处理方式",
+      "en": "Processing"
+    },
+    "about.processingValue": {
+      "zh-Hans": "完全本机，不上传文件",
+      "en": "Entirely on this Mac, no uploads"
+    },
+    "about.signing": {
+      "zh-Hans": "签名",
+      "en": "Signing"
+    },
+    "about.signingValue": {
+      "zh-Hans": "未经 Apple 公证",
+      "en": "Not notarized by Apple"
+    },
+    "about.footer": {
+      "zh-Hans": "内置 LibreOffice、独立 Python 与开源转换组件，各自保留原许可证。OCR、PDF 转可编辑 Office、音视频处理属于后续规划。",
+      "en": "Bundles LibreOffice, a private Python runtime and open-source conversion components, each under its own license. OCR, PDF-to-editable-Office and audio/video work are planned for later versions."
+    },
+    "about.openDocs": {
+      "zh-Hans": "打开使用说明与许可证",
+      "en": "Open the Guide and Licenses"
+    }
+  }
+}
