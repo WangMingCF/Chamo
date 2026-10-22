@@ -14,8 +14,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: cross-platform-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a PR replaces the older run, but every commit on main is
+  # verified to the end: with several developers merging, cancelling on main
+  # would leave commits (and release tags) that never got a complete run.
+  group: cross-platform-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   engine:
