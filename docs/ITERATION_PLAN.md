@@ -51,12 +51,14 @@
 - **多端功能单测**：按 `docs/CI_TESTING.md` 补测试并确认对应 CI 作业覆盖；它列出了每个必需检查覆盖什么、新功能必须补哪些用例、哪些部分 CI 覆盖不到。
 - **CI 不等于产品测试**：CI 覆盖引擎与打包；macOS GUI 需在打包后的应用里点击验证（`-D CHAMO_DEBUG` 钩子与截图）。
 
-## 3. 当前状态（2026-10-21，已核实）
+## 3. 当前状态（2026-10-22，已核实）
 
 | 项 | 状态 |
 | --- | --- |
-| 代码 | `main` = `d5c1636`，单提交；Swift 界面约 3,100 行，引擎约 7,700 行（含 `cloud_kb_pack`）；254 个 Python 测试 + 2 组 Swift 测试 |
-| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、自循环工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。现有两个间歇失败的测试见 `docs/CI_TESTING.md` 第 8 节 |
+| 代码 | `main` = `3f03e18`；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
+| 竞品 | `docs/COMPETITORS.md` 已入库：15 个产品、两张矩阵、每格标证据等级；**没有任何实测**，两处官方页面抓不到已标「待复核」，Kumquat 官网 404 未列入 |
+| 基准 | `scripts/bench_corpus.py`、`scripts/bench.py`、`scripts/bench_quality.py` 与 `tests/test_bench.py` 在 **PR #18**（三端 `test-matrix` 各 9/9 通过），合并前不作为基线引用 |
+| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、自循环工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
 | 发布 | **尚无任何 Release**。旧的本地发布脚本已删除，需要 GitHub Actions 发布流程 |
 | 签名 | macOS ad-hoc，未做 Developer ID 签名与公证；Windows 未签名 |
 | 能力 | PDF 转图片（分片成本模型、页级续跑）、PDF 拆分/合并/压缩、Office/WPS 转 PDF/图片、图片合成 PDF、图片转换/压缩、RAG 严格预处理；CLI `chamo`、本机浏览器界面 `chamo ui` |
@@ -110,7 +112,10 @@
 - **不得回退**：CI 现有 5 个作业全绿。
 - **待决**：公开发布前问维护者。
 
-### 0.2.0 · 验证与基准底座（准、快、小的度量衡）
+### 0.2.0 · 验证与基准底座（准、快、小的度量衡）· 进行中
+
+> 状态（2026-10-22）：**部分完成**。已做：确定性合成语料（smoke / representative / holdout 三套）、统一运行器（N 次重复、中位数与波动、强制关页缓存、记录机器与依赖版本、JSON 输出）、逐格式质量检查器（逐页与 pdfium 同 dpi 比对、无损图片逐像素、拆分页并集、压缩后文字层、RAG 导出哈希），以及「五类作弊必须被判红」的测试（PR #18）。
+> 未做：① 第 4.1 节数字的复现（需要打包后的 `.app`，等发布流水线）；② 同口径竞品实测（需要把开源工具装进 runner）；③ CI 里的独立基准作业（要改 `.github/`，属受保护路径）。
 
 - **目标**：让后面 19 个版本的每个「更快/更小/更准」都有可复跑的同口径证据。
 - **依据**：旧研究的基准脚本在仓库外，口径不统一；本轮发现页缓存会让 PDF 基准失真 2.3 倍。
@@ -249,6 +254,10 @@
 | 旧项目 0.3 前 | 无损 PDF 清理收益窄，不宣传压缩率 | `cleanup`、`cleanup-attribution` |
 | 旧项目 0.3 前 | 常驻 LibreOffice 收益有限、风险高，暂缓 | `mixed` 冷/热启数据 |
 | 2026-10-21 | PDF 基准必须关闭页缓存，否则第二次运行只剩约 40% | 第 4.1 节 |
+| 2026-10-22 | 「把整页缩到 96×96 再算 SSIM」不足以判断两页是否相同：96% 白底、只有几行文字不同的两页会被判成同一页（CI 上被 `swapped-page` 用例抓到）。改为全分辨率平均差（阈值 1.0 灰阶）＋最差 1/16 块平均差（阈值 8.0） | PR #18 的三端 test-matrix |
+| 2026-10-22 | OOXML 语料默认**不可复现**：openpyxl 保存时刷新 `docProps/core.xml` 的时间戳，且 zip 条目带保存时间。固定核心属性还不够，必须同时规范化 `docProps/*.xml` 与 zip 时间戳 | PR #18 的 macOS/Windows 失败与修复 |
+| 2026-10-22 | macOS 上 `content.text` 计时门禁：把判据从中位数改成「每臂取最小、最多 8 对」后，配对波动从 ±17.8% 收到 ±8.9%，但 10 次里仍失败 1 次（ratio 0.944，判为慢 5.6%） | Issue #10，run 39740360476 |
+| 2026-10-22 | 假设（未验证）：auto 臂比 off 多出的 5–6% CPU 可能来自内容判定本身（120 页文本 PDF 读一遍约 0.5–0.6 s），即 5% 预算可能小于功能的固定开销 | Issue #10 的算式，待用 `pageclass.classify()` 单独计时验证 |
 
 ## 7. 外部阻塞
 
@@ -257,3 +266,5 @@
 | 无 Apple Developer ID / 公证 | 首次打开被 Gatekeeper 拦截 | 维护者决定是否付费；在此之前所有文档写明 ad-hoc |
 | 无 Windows 代码签名 | SmartScreen 警告 | 同上 |
 | 真实样本 | OCR 与 Office 保真需要真实文档验收 | 只用维护者提供的小份只读样本，不入库 |
+| `agent-review` 服务对大 diff 无响应 | 评审作业 15 分钟以上不出结果、或 5 分钟被对端断开，PR 无法合并 | 已在 #5 请维护者核查代理的读超时与配置；开发侧对策是把 PR 拆小 |
+| Linux CI 缺 LibreOffice Calc | `.xlsx` 转换在 Linux 上没有任何自动化验证 | 建议在 `.github/actions/setup-engine` 增加 `libreoffice-calc`（受保护路径，需维护者审核） |
