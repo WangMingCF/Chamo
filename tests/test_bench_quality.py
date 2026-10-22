@@ -228,6 +228,18 @@ def test_more_than_nine_parts_are_ordered_by_number_not_by_string(tmp_path):
     assert quality.check_pdf_split(source, out) == []
 
 
+def test_parts_are_ordered_by_their_own_number_when_the_stem_has_digits(tmp_path):
+    """A source named report_2024.pdf puts 2024 in front of every part name.
+
+    Sorting by the first number would tie on 2024 for all parts, fall back to
+    string order and put part_10 before part_2 - failing a correct split.
+    """
+    source = _source_pdf(tmp_path / "report_2024.pdf", 12)
+    out = tmp_path / "report_2024"
+    _split(source, out, [("report_2024_%02d.pdf" % (n + 1), [n]) for n in range(12)])
+    assert quality.check_pdf_split(source, out) == []
+
+
 def test_the_strict_export_must_be_the_source_and_nothing_else(tmp_path):
     source = tmp_path / "src"
     source.mkdir()
@@ -259,17 +271,22 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
     image = Image.new("RGB", (32, 24), (10, 120, 200))
     image.save(source)
 
-    # Converting into a lossy container is measured, not required to be identical:
-    # quality 95 stays close, a different picture does not.
+    other = Image.new("RGB", (32, 24), (200, 10, 10))
+
+    # The contract comes from the caller (the engine knows if the run was
+    # lossless), never from the suffix: WebP exists in both forms.
     converted = tmp_path / "converted.jpg"
     image.save(converted, "JPEG", quality=95)
-    assert quality.check_image_pairs([(source, converted)], mode="convert") == []
+    assert quality.check_image_pairs([(source, converted)], mode="convert",
+                                     lossy_target=True) == []
 
-    # Converting into a lossless container must stay pixel-identical.
+    # A conversion declared lossless must stay pixel-identical, JPEG or not.
+    issues = quality.check_image_pairs([(source, converted)], mode="convert")
+    assert any("changed the picture" in issue for issue in issues), issues
+
     same_png = tmp_path / "same.png"
     image.save(same_png)
     assert quality.check_image_pairs([(source, same_png)], mode="convert") == []
-    other = Image.new("RGB", (32, 24), (200, 10, 10))
     changed_png = tmp_path / "changed.png"
     other.save(changed_png)
     issues = quality.check_image_pairs([(source, changed_png)], mode="convert")
@@ -277,7 +294,8 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
 
     changed = tmp_path / "changed.jpg"
     other.save(changed, "JPEG", quality=95)
-    issues = quality.check_image_pairs([(source, changed)], mode="convert")
+    issues = quality.check_image_pairs([(source, changed)], mode="convert",
+                                       lossy_target=True)
     assert any("changed the picture" in issue for issue in issues), issues
 
     # lossy is measured, not required to be identical: a mild JPEG passes,
