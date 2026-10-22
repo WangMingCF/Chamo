@@ -115,8 +115,25 @@ decision = pageclass.classify(sys.argv[2])
 # Prefixed lines: anything else the import or classify() prints is ignored.
 print("CHAMO_SAMPLE_CPU=%r" % (time.process_time() - cpu))
 print("CHAMO_SAMPLE_WALL=%r" % (time.perf_counter() - wall))
+print("CHAMO_SAMPLE_CPU_RES=%r" % time.get_clock_info("process_time").resolution)
 print("CHAMO_SAMPLE_KIND=%s" % decision["kind"])
 """
+
+
+def pick_sample_seconds(cpu: float, wall: float, resolution: float, clock: str):
+    """One content-sample reading in the off runs' clock, and the basis used.
+
+    A CPU reading is used only when it clearly exceeds the clock's resolution.
+    Windows process_time() ticks in ~15.6 ms steps, so the few-millisecond sample
+    can read 0.0 there, and a 0 would make the share check unable to fail. Below
+    two ticks the same measurement's wall time is used instead: the sample runs
+    on one thread, so its wall time is an upper bound on its CPU time.
+    """
+    if clock != "cpu":
+        return wall, "wall"
+    if cpu >= 2 * max(resolution, 0.0) and cpu > 0:
+        return cpu, "cpu"
+    return wall, "wall-bound"
 
 
 def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAMPLE_COST_REPS,
@@ -125,10 +142,12 @@ def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAM
 
     Each measurement runs in a fresh interpreter, cold like the engine's own
     first call. clock is "cpu" or "wall", matching the clock of the shard=off
-    runs it is compared with. Returns (seconds list, kinds list, problems list).
+    runs it is compared with (see pick_sample_seconds for CPU below resolution).
+    Returns (seconds list, kinds list, problems list, basis list).
     """
-    key = "CHAMO_SAMPLE_CPU=" if clock == "cpu" else "CHAMO_SAMPLE_WALL="
-    seconds, kinds, problems = [], [], []
+    keys = ("CHAMO_SAMPLE_CPU=", "CHAMO_SAMPLE_WALL=", "CHAMO_SAMPLE_CPU_RES=",
+            "CHAMO_SAMPLE_KIND=")
+    seconds, kinds, problems, basis = [], [], [], []
     for _ in range(max(1, int(reps))):
         try:
             done = subprocess.run([sys.executable, "-I", "-B", "-c", _SAMPLE_COST_PROBE,
@@ -140,20 +159,23 @@ def measure_content_sample_cpu(engine_dir: Path, pdf: Path, reps: int = TEXT_SAM
             continue
         fields = {}
         for line in done.stdout.splitlines():
-            for prefix in (key, "CHAMO_SAMPLE_KIND="):
+            for prefix in keys:
                 if line.startswith(prefix):
                     fields[prefix] = line[len(prefix):].strip()
-        if done.returncode != 0 or len(fields) != 2:
+        if done.returncode != 0 or len(fields) != len(keys):
             problems.append("content sample probe failed (rc=%s): %s"
                             % (done.returncode, (done.stderr or done.stdout)[-400:]))
             continue
         try:
-            seconds.append(float(fields[key]))
+            value, used = pick_sample_seconds(float(fields[keys[0]]), float(fields[keys[1]]),
+                                              float(fields[keys[2]]), clock)
         except ValueError:
-            problems.append("content sample probe printed %r" % fields[key])
+            problems.append("content sample probe printed %r" % fields)
             continue
+        seconds.append(value)
+        basis.append(used)
         kinds.append(fields["CHAMO_SAMPLE_KIND="])
-    return seconds, kinds, problems
+    return seconds, kinds, problems, basis
 
 
 # The engine reports the gain floor it used in the job report; it is part of the
@@ -1604,8 +1626,9 @@ def _content_sample_cost_check(session, pairs, use_cpu) -> dict:
                  if not off_run.get("fatal") and off_run.get("rc") in (0, None)
                  and (off_run.get("cpu") if use_cpu else off_run.get("wall"))]
     engine_dir = Path(session.engine).resolve().parent
-    seconds, kinds, problems = measure_content_sample_cpu(
+    seconds, kinds, problems, *rest = measure_content_sample_cpu(
         engine_dir, session.fixture("text"), clock="cpu" if use_cpu else "wall")
+    basis = rest[0] if rest else []
     if any(kind != "text" for kind in kinds):
         problems.append("the content sample called the text PDF %r (expected 'text')" % kinds)
     if not off_costs:
@@ -1627,12 +1650,12 @@ def _content_sample_cost_check(session, pairs, use_cpu) -> dict:
         "shard=off run and <= %.2f s (max of %d fresh-interpreter measurements vs "
         "median off, both in %s)"
         % (TEXT_REGRESSION_MAX * 100, TEXT_SAMPLE_MAX_SECONDS, TEXT_SAMPLE_COST_REPS, metric),
-        "sample %s s vs off median %s s = %s"
-        % (["%.4f" % value for value in seconds],
+        "sample %s s (basis %s) vs off median %s s = %s"
+        % (["%.4f" % value for value in seconds], basis or "n/a",
            "%.2f" % statistics.median(off_costs) if off_costs else "n/a",
            "%.3f%%" % (share * 100) if share is not None else "n/a"),
         problems,
-        meta={"share": share, "seconds": seconds})
+        meta={"share": share, "seconds": seconds, "basis": basis})
 
 
 def gate_speed_image(session: GateSession, reps=None) -> dict:

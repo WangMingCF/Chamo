@@ -320,13 +320,21 @@ def test_content_sample_probe_measures_the_real_classifier(tmp_path):
     pdf = tmp_path / "text.pdf"
     vs.make_text_pdf(pdf, 12)
     for clock in ("cpu", "wall"):
-        seconds, kinds, problems = vs.measure_content_sample_cpu(ROOT / "engine", pdf, reps=1,
-                                                                 clock=clock)
+        seconds, kinds, problems, basis = vs.measure_content_sample_cpu(
+            ROOT / "engine", pdf, reps=1, clock=clock)
         assert problems == [] and kinds == ["text"], (problems, kinds)
-        # Windows process_time() ticks in ~15.6 ms steps, so a few-millisecond
-        # sample can read 0.0 CPU there; wall time is always measurable.
-        lowest = 0.0 if clock == "cpu" else 1e-9
-        assert lowest <= seconds[0] < vs.TEXT_SAMPLE_MAX_SECONDS, (clock, seconds)
+        # Never 0: a CPU reading below the clock's resolution falls back to wall.
+        assert 0 < seconds[0] < vs.TEXT_SAMPLE_MAX_SECONDS, (clock, seconds, basis)
+        assert basis[0] in (("cpu", "wall-bound") if clock == "cpu" else ("wall",)), basis
+
+
+def test_a_cpu_reading_below_resolution_never_counts_as_zero():
+    """Windows reads a few-ms sample as 0.0 CPU (15.6 ms ticks); 0 must not pass for free."""
+    assert vs.pick_sample_seconds(0.0, 0.012, 0.015625, "cpu") == (0.012, "wall-bound")
+    assert vs.pick_sample_seconds(0.015625, 0.020, 0.015625, "cpu") == (0.020, "wall-bound")
+    assert vs.pick_sample_seconds(0.0625, 0.070, 0.015625, "cpu") == (0.0625, "cpu")
+    assert vs.pick_sample_seconds(0.021, 0.025, 1e-6, "cpu") == (0.021, "cpu")
+    assert vs.pick_sample_seconds(0.021, 0.025, 1e-6, "wall") == (0.025, "wall")
 
 
 def _stub_session(off_times, auto_times, clock="cpu"):
