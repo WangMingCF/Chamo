@@ -27,6 +27,7 @@ on:
       - scripts/restore_libreoffice.py
       - scripts/build_linux.py
       - scripts/build_windows.py
+      - scripts/collect_sources.py
       - third_party/dependencies.json
       - third_party/requirements.lock
   workflow_dispatch:
@@ -80,6 +81,11 @@ jobs:
 
       - name: Build the app
         run: python3 scripts/build_app.py
+
+      - name: Collect third-party source archives
+        # Ships in the DMG as ThirdPartySources (license compliance): sdists and
+        # an index for exactly the packages the bundled interpreter carries.
+        run: third_party/python/bin/python3 scripts/collect_sources.py
 
       - name: Package the DMG
         run: python3 scripts/package_dmg.py
