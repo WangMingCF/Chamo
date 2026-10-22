@@ -99,14 +99,26 @@ def page_entries(out_dir) -> list:
 # --------------------------------------------------------------------------
 # Image comparison (no numpy)
 # --------------------------------------------------------------------------
-def _grey_pixels(image, sample: int = 96):
-    grey = image.convert("L")
-    width, height = grey.size
+def _plane_pixels(image, sample: int = 96):
+    """One downscaled 8-bit plane as a byte list, plus its size."""
+    width, height = image.size
     if max(width, height) > sample:
         scale = sample / float(max(width, height))
-        grey = grey.resize((max(1, int(width * scale)), max(1, int(height * scale))))
-        width, height = grey.size
-    return list(grey.tobytes()), width, height
+        image = image.resize((max(1, int(width * scale)), max(1, int(height * scale))))
+        width, height = image.size
+    return list(image.tobytes()), width, height
+
+
+def _planes(image):
+    """The planes to compare: R, G, B for colour, L otherwise.
+
+    Colour must be compared per channel. Two flat images, one blue and one red,
+    have almost the same luma, so a grey SSIM scores them as nearly identical and
+    a lossy pass that shifted every hue would go through.
+    """
+    if image.mode in ("RGB", "RGBA"):
+        return list(image.convert("RGB").split())
+    return [image.convert("L")]
 
 
 def _integral(values, width, height):
@@ -128,12 +140,7 @@ def _box_sum(table, stride, x0, y0, x1, y1):
             - table[y1 * stride + x0] + table[y0 * stride + x0])
 
 
-def ssim(left, right, sample: int = 64, window: int = 7) -> float:
-    """Mean structural similarity of two images, on a downscaled grey copy."""
-    a, width, height = _grey_pixels(left, sample)
-    b, width_b, height_b = _grey_pixels(right, sample)
-    if (width, height) != (width_b, height_b):
-        return 0.0
+def _ssim_single(a, b, width, height, window: int) -> float:
     stride = width + 1
     half = max(1, window // 2)
     sums = [_integral(a, width, height), _integral(b, width, height),
@@ -163,10 +170,32 @@ def ssim(left, right, sample: int = 64, window: int = 7) -> float:
     return total / count if count else 0.0
 
 
+def ssim(left, right, sample: int = 64, window: int = 7) -> float:
+    """Structural similarity of two images, averaged over their colour planes."""
+    left_planes, right_planes = _planes(left), _planes(right)
+    if len(left_planes) != len(right_planes):
+        return 0.0
+    scores = []
+    for left_plane, right_plane in zip(left_planes, right_planes):
+        a, width, height = _plane_pixels(left_plane, sample)
+        b, width_b, height_b = _plane_pixels(right_plane, sample)
+        if (width, height) != (width_b, height_b):
+            return 0.0
+        scores.append(_ssim_single(a, b, width, height, window))
+    return sum(scores) / len(scores) if scores else 0.0
+
+
 def psnr(left, right) -> float:
-    """Peak signal-to-noise ratio in dB; reported for lossy work, never identity."""
-    a, width, height = _grey_pixels(left, 192)
-    b, _, _ = _grey_pixels(right, 192)
+    """Peak signal-to-noise ratio in dB on a downscaled grey copy.
+
+    Reported for lossy work next to SSIM, never as proof of identity. The number is
+    computed after downscaling, so it is a comparison aid, not a full-resolution
+    PSNR; the message that prints it says so.
+    """
+    a, width, height = _plane_pixels(left.convert("L"), 192)
+    b, width_b, height_b = _plane_pixels(right.convert("L"), 192)
+    if (width, height) != (width_b, height_b):
+        return 0.0
     squared = sum((x - y) ** 2 for x, y in zip(a, b)) / float(len(a) or 1)
     if squared <= 0:
         return float("inf")
