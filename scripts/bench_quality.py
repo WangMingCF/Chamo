@@ -56,6 +56,7 @@ PAGE_FILE = re.compile(r"_(?:page)?(\d+)\.(png|jpe?g|webp|tiff?|bmp)$", re.I)
 MEAN_ABS_MAX = 1.0        # full-resolution mean of |delta|, in grey levels
 BLOCK_MEAN_MAX = 8.0      # worst block mean of |delta|, in grey levels
 LOSSY_SSIM_MIN = 0.90     # the bar a user-selected quality loss has to clear
+CONVERT_SSIM_MIN = 0.95   # a conversion into a lossy container must stay this close
 
 
 def sha256_file(path: Path) -> str:
@@ -360,7 +361,19 @@ def check_image_pairs(pairs, mode: str = "lossless") -> list:
                                       % (source.name, score, LOSSY_SSIM_MIN, psnr(left, right)))
                     continue
                 if mode == "convert":
-                    if left.convert("RGBA").tobytes() != right.convert("RGBA").tobytes():
+                    # A conversion into a lossy container is allowed to lose detail -
+                    # that is what choosing JPEG means - so it is measured, not
+                    # required to be identical. A conversion that stays lossless
+                    # must be pixel-identical.
+                    lossy_target = Path(output).suffix.lower() in (".jpg", ".jpeg", ".webp")
+                    if lossy_target:
+                        score = ssim(left, right)
+                        if score < CONVERT_SSIM_MIN:
+                            issues.append("%s: converting to %s changed the picture "
+                                          "(SSIM %.4f < %.2f)"
+                                          % (source.name, Path(output).suffix, score,
+                                             CONVERT_SSIM_MIN))
+                    elif left.convert("RGBA").tobytes() != right.convert("RGBA").tobytes():
                         issues.append("%s: converting the format changed the picture"
                                       % source.name)
                     continue
