@@ -307,6 +307,38 @@ def test_format_conversion_must_keep_the_picture_and_lossy_work_is_measured(tmp_
     assert any("differs too much" in issue for issue in issues), issues
 
 
+def test_a_chroma_only_change_is_reported(tmp_path):
+    """Luma weights hide a colour shift; the gate must compare channels.
+
+    Blue is weighted 0.114 in luma, so an 8-level blue shift moves the grey
+    difference by 0.91, under the 1.0 mean threshold: before the per-channel fix a
+    picture whose colour had changed passed the "the picture did not change" gate.
+    """
+    from PIL import Image
+
+    left = Image.new("RGB", (32, 32), (10, 20, 30))
+    right = Image.new("RGB", (32, 32), (10, 20, 38))
+    issues = quality.compare_pil(left, right, "page 1")
+    assert any("picture differs" in issue for issue in issues), issues
+
+
+def test_palette_images_are_compared_by_colour_not_by_index(tmp_path):
+    """Same indices, different palettes: identical bytes, completely different picture."""
+    from PIL import Image
+
+    def paletted(colour):
+        image = Image.new("P", (16, 16), 0)
+        image.putpalette(list(colour) + [0] * 765)
+        return image
+
+    source = tmp_path / "source.png"
+    other = tmp_path / "other.png"
+    paletted((200, 10, 10)).save(source)
+    paletted((10, 200, 10)).save(other)
+    issues = quality.check_image_pairs([(source, other)])
+    assert any("not identical" in issue for issue in issues), issues
+
+
 def test_a_third_name_collision_is_still_found(tmp_path):
     """The engine numbers collisions " (2)", " (3)" ...; only " (2)" was matched."""
     from PIL import Image
