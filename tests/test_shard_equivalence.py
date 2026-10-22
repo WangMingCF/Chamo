@@ -323,7 +323,10 @@ def test_content_sample_probe_measures_the_real_classifier(tmp_path):
         seconds, kinds, problems = vs.measure_content_sample_cpu(ROOT / "engine", pdf, reps=1,
                                                                  clock=clock)
         assert problems == [] and kinds == ["text"], (problems, kinds)
-        assert 0 < seconds[0] < vs.TEXT_SAMPLE_MAX_SECONDS, seconds
+        # Windows process_time() ticks in ~15.6 ms steps, so a few-millisecond
+        # sample can read 0.0 CPU there; wall time is always measurable.
+        lowest = 0.0 if clock == "cpu" else 1e-9
+        assert lowest <= seconds[0] < vs.TEXT_SAMPLE_MAX_SECONDS, (clock, seconds)
 
 
 def _stub_session(off_times, auto_times, clock="cpu"):
