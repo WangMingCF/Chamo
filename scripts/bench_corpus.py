@@ -24,12 +24,15 @@ re-zipped with fixed entry timestamps and fixed core properties, and no path,
 host name or wall-clock value reaches a file. Do not add a writer that embeds
 the current time without normalising the package with _normalize_zip.
 
-Byte identity across machines assumes the dependency lock: JPEG bytes come from
-the pinned Pillow/libjpeg build, so a different encoder version changes them
-without anything in the engine changing. The manifest makes that visible rather
-than silent (a check fails and names the file), but a dependency bump is expected
-to require regenerating the manifest, and it must not be mistaken for a change in
-what Chamo does.
+Byte identity is designed for, not assumed: entry times, document properties, the
+"version made by" field and compression are all removed from the answer (see
+_normalize_zip), so a Windows runner and a Linux runner produce the same archive
+bytes for the same content. Two things are still outside this module's control
+and are recorded here rather than hidden: JPEG bytes come from the pinned
+Pillow/libjpeg build, and the PNG encoder's output may move with Pillow. The
+manifest makes such a change visible rather than silent - a check fails and names
+the file - but a dependency bump is expected to require regenerating the manifest,
+and it must not be mistaken for a change in what Chamo does.
 
 Usage
 -----
@@ -123,22 +126,30 @@ _PACKAGE_TIMESTAMP_REPLACEMENT = b"2020-01-01T00:00:00Z"
 def _normalize_zip(path: Path) -> None:
     """Rewrite an OOXML package into a reproducible form.
 
-    Two writers can produce the same document and different bytes: the zip entry
-    time is part of the archive, and the document properties carry the time the
-    file was saved. Both are normalised here so the corpus is byte-identical on
-    every build and every machine, without patching the writers. Entry order is
-    preserved, the compression level is fixed, and the original is replaced
-    atomically (write beside it, then rename).
+    Writers can produce the same document and different bytes in four ways, and all
+    four are removed here: the entry time (part of the archive), the document
+    properties (the save time), the "version made by" field (CPython writes the
+    host platform into it, so Windows and POSIX disagree), and DEFLATE output (its
+    bytes depend on the zlib build, which the dependency lock does not pin).
+
+    Entries are re-written STORED, not deflated: a corpus is generated at runtime,
+    so its size does not matter, and no compression means no zlib version in the
+    answer. Entry order is preserved and the original is replaced atomically
+    (write beside it, then rename).
     """
     with zipfile.ZipFile(path) as source:
         entries = [(info.filename, source.read(info.filename)) for info in source.infolist()]
     temporary = path.with_name(path.name + ".normalizing")
-    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as target:
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_STORED) as target:
         for name, data in entries:
             if name.startswith("docProps/") and name.endswith(".xml"):
                 data = _PACKAGE_TIMESTAMP.sub(_PACKAGE_TIMESTAMP_REPLACEMENT, data)
             info = zipfile.ZipInfo(name, date_time=ZIP_TIMESTAMP)
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED
+            # CPython defaults this to the host platform (0 on Windows, 3
+            # elsewhere), and it is written into the archive. Pinning it is what
+            # lets the same corpus have the same bytes on every runner.
+            info.create_system = 3
             info.external_attr = 0o644 << 16
             target.writestr(info, data)
     temporary.replace(path)
@@ -148,9 +159,16 @@ def _normalize_zip(path: Path) -> None:
 # PDF fixtures (reportlab; invariant=1 removes the creation date)
 # --------------------------------------------------------------------------
 def _canvas(path: Path):
+    """A canvas with no creation date (invariant=1) and no Flate compression.
+
+    pageCompression=0 costs bytes and buys a deterministic file: DEFLATE output
+    depends on the zlib build, which the dependency lock does not pin, and a
+    corpus whose bytes change with the host's zlib cannot be compared across
+    machines. The generators run at build time, so the size is not a concern.
+    """
     from reportlab.pdfgen import canvas as reportlab_canvas
 
-    return reportlab_canvas.Canvas(str(path), invariant=1, pageCompression=1)
+    return reportlab_canvas.Canvas(str(path), invariant=1, pageCompression=0)
 
 
 def text_pdf(path: Path, pages: int, lines: int = 55) -> Path:
@@ -358,12 +376,13 @@ def docx_document(path: Path, paragraphs: int) -> Path:
         body.append('<w:p><w:r><w:t>Paragraph %d: the quick brown fox 0123456789</w:t></w:r></w:p>'
                     % (index + 1))
     document = _DOCX_DOCUMENT % "".join(body)
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as archive:
         for name, data in (("[Content_Types].xml", _DOCX_CONTENT_TYPES),
                            ("_rels/.rels", _DOCX_RELS),
                            ("word/document.xml", document)):
             info = zipfile.ZipInfo(name, date_time=ZIP_TIMESTAMP)
-            info.compress_type = zipfile.ZIP_DEFLATED
+            info.compress_type = zipfile.ZIP_STORED
+            info.create_system = 3      # see _normalize_zip
             info.external_attr = 0o644 << 16
             archive.writestr(info, data.encode("utf-8"))
     return path
@@ -428,6 +447,12 @@ def build(dest, suite: str = "representative") -> dict:
     dest = Path(dest)
     if dest.exists() and not dest.is_dir():
         raise SystemExit("corpus destination is a file, not a directory: %s" % dest)
+    if dest.exists() and dest.is_dir():
+        # A build interrupted between "write beside it" and "rename" leaves a
+        # .normalizing file behind. It is not part of the corpus, so clean it up
+        # instead of refusing to rebuild in a directory that looks used.
+        for stale in dest.rglob("*.normalizing"):
+            stale.unlink(missing_ok=True)
     if dest.exists() and any(dest.iterdir()):
         raise SystemExit("refusing to write into a non-empty directory: %s" % dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -459,7 +484,12 @@ def check(dest) -> list:
     manifest_path = dest / MANIFEST_NAME
     if not manifest_path.is_file():
         return ["no manifest at %s" % manifest_path]
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return ["manifest at %s cannot be read: %s" % (manifest_path, error)]
+    if not isinstance(manifest, dict) or "files" not in manifest:
+        return ["manifest at %s has no file list" % manifest_path]
     issues = []
     listed = {entry["path"] for entry in manifest["files"]}
     for entry in manifest["files"]:
@@ -479,17 +509,20 @@ def check(dest) -> list:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Generate the deterministic benchmark corpora")
     parser.add_argument("--dest", required=True, help="empty directory to write the corpus into")
-    parser.add_argument("--suite", default="representative", choices=sorted(SUITES))
+    parser.add_argument("--suite", default=None, choices=sorted(SUITES),
+                        help="which corpus to build (default representative); ignored with --check")
     parser.add_argument("--check", action="store_true",
                         help="verify an existing corpus against its manifest instead of building")
     args = parser.parse_args(argv)
+    if args.check and args.suite:
+        parser.error("--check verifies an existing corpus; --suite only applies when building")
     if args.check:
         issues = check(args.dest)
         for issue in issues:
             print("FAIL %s" % issue)
         print("corpus %s: %s" % (args.dest, "OK" if not issues else "%d issue(s)" % len(issues)))
         return 0 if not issues else 1
-    manifest = build(args.dest, args.suite)
+    manifest = build(args.dest, args.suite or "representative")
     print("corpus %s written: %d files, %.1f MB"
           % (args.dest, len(manifest["files"]), manifest["total_bytes"] / 1e6))
     return 0
