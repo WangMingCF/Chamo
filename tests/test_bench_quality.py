@@ -240,6 +240,16 @@ def test_parts_are_ordered_by_their_own_number_when_the_stem_has_digits(tmp_path
     assert quality.check_pdf_split(source, out) == []
 
 
+def test_a_stray_non_pdf_in_the_output_is_not_a_part(tmp_path):
+    """A report or a preview next to the parts is not a part of the split."""
+    source = _source_pdf(tmp_path / "source.pdf", 4)
+    out = tmp_path / "out"
+    _split(source, out, [("part_1.pdf", [0, 1]), ("part_2.pdf", [2, 3])])
+    (out / "处理报告.txt").write_text("not a pdf", encoding="utf-8")
+    (out / "preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    assert quality.check_pdf_split(source, out) == []
+
+
 def test_the_strict_export_must_be_the_source_and_nothing_else(tmp_path):
     source = tmp_path / "src"
     source.mkdir()

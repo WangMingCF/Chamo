@@ -498,17 +498,27 @@ def _part_order(path: Path):
 def check_pdf_split(source_pdf, out_dir) -> list:
     """The parts are the source, page for page and in order - by text layer.
 
-    The comparison is the extracted text of every page, which catches lost,
-    duplicated and reordered pages cheaply. It does not re-render the pages, so a
-    split that kept the text and rewrote the pictures would pass; that is a known
-    limit of this check, not a claim of pixel identity (compression has its own
-    check, with a rendered sample)."""
+    The comparison is the extracted text of every page. It catches lost and
+    duplicated pages for every input, and swapped parts for born-digital ones.
+
+    Two limits, stated here because they are the difference between "checked" and
+    "assumed":
+      * it does not re-render the pages, so a split that kept the text and rewrote
+        the pictures passes (compression has its own check, with a rendered sample);
+      * a scanned document has no text layer, so every page compares equal and a
+        swapped order goes through unnoticed - for those, only the page count is
+        verified.
+    """
     issues = []
     try:
         source_pages = pdf_text_pages(source_pdf)
     except Exception as error:                          # noqa: BLE001 - report it
         return ["source PDF cannot be read: %s" % error]
-    parts = sorted(deliverables(out_dir), key=_part_order)
+    # Only PDFs are parts. A stray report or preview in the output folder is not a
+    # part, and treating it as one failed a correct split (the same filter
+    # check_pdf_compress already applies).
+    parts = [path for path in sorted(deliverables(out_dir), key=_part_order)
+             if path.suffix.lower() == ".pdf"]
     if not parts:
         return ["no split output in %s" % out_dir]
     joined = []
