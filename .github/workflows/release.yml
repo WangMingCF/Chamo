@@ -8,7 +8,9 @@ name: release
 # Triggers:
 #   * a tag v<version> matching config/release.json  -> build, verify, draft release
 #   * a PR that touches the release pipeline           -> build and verify only
-#   * workflow_dispatch                                -> build and verify only
+#   * workflow_dispatch with a tag                     -> build that tag with this
+#     (default-branch) workflow, verify, and create or refresh its draft release;
+#     without a tag: build and verify the default branch only
 #
 # Not done here (and never claimed): Developer ID signing and notarization. The
 # app stays ad-hoc signed, the Windows ZIP unsigned; the draft notes say so.
@@ -31,12 +33,22 @@ on:
       - third_party/dependencies.json
       - third_party/requirements.lock
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing version tag to build and draft (e.g. v0.1.0); empty = verify only"
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
+env:
+  # The code to build: the dispatched tag, or whatever triggered the run.
+  BUILD_REF: ${{ inputs.tag || github.ref }}
+  RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name || '') }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -47,16 +59,15 @@ jobs:
       version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
       - id: v
         name: Tag, config and docs agree
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           version=$(python3 -c 'import json; print(json.load(open("config/release.json"))["version"])')
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ "$REF_TYPE" = tag ] && [ "$REF_NAME" != "v$version" ]; then
-            echo "tag $REF_NAME does not match config/release.json version $version"; exit 1
+          if [ -n "$RELEASE_TAG" ] && [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "tag $RELEASE_TAG does not match config/release.json version $version"; exit 1
           fi
           python3 scripts/verify_docs_version.py
 
@@ -67,6 +78,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
 
       - name: Cache pinned downloads
         # Keyed on the pin file: a changed URL or hash always downloads again,
@@ -121,7 +134,7 @@ jobs:
           PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
         run: |
           if [ -z "$PRIVACY_KEYWORDS" ]; then
-            if [ "${{ github.ref_type }}" = tag ]; then echo "PRIVACY_KEYWORDS is required for a release"; exit 1; fi
+            if [ -n "$RELEASE_TAG" ]; then echo "PRIVACY_KEYWORDS is required for a release"; exit 1; fi
             echo "::warning::PRIVACY_KEYWORDS not available here (fork or dry run); scan skipped"; exit 0
           fi
           printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
@@ -150,6 +163,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -179,6 +194,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -209,22 +226,29 @@ jobs:
 
   draft:
     name: draft release
-    # Only a version tag creates a release; PRs and manual runs stop after verifying.
-    if: github.ref_type == 'tag'
+    # Only a version tag creates or refreshes a release; PRs and untagged manual
+    # runs stop after verifying.
+    if: (github.ref_type == 'tag' || inputs.tag != '') && !cancelled() && needs.macos.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success'
     needs: [check, macos, linux, windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
       - uses: actions/download-artifact@v4
         with:
           pattern: dist-*
-          path: assets
+          # Not "assets": the checkout has its own assets/ (brand files), and
+          # mixing them in once put the logo folder into the release.
+          path: release-assets
           merge-multiple: true
       - name: Checksums
         run: |
-          cd assets
+          cd release-assets
+          ls -la
+          for f in *; do [ -f "$f" ] || { echo "unexpected entry $f"; exit 1; }; done
           sha256sum * | tee SHA256SUMS.txt
       - name: Privacy scan of asset names and notes
         env:
@@ -234,7 +258,7 @@ jobs:
           printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
           # The packages' own text was scanned in their build jobs and in review;
           # here: asset names, the file lists inside them, and the notes.
-          { ls assets; unzip -Z1 assets/*.zip; for d in assets/*.deb; do dpkg-deb -c "$d"; done; cat docs/RELEASE_NOTES.txt; } \
+          { ls release-assets; unzip -Z1 release-assets/*.zip; for d in release-assets/*.deb; do dpkg-deb -c "$d"; done; cat docs/RELEASE_NOTES.txt; } \
             | python3 ops/agent-loop/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" text
       - name: Create the draft
         env:
@@ -248,5 +272,18 @@ jobs:
             echo "校验：下载后用 SHA256SUMS.txt 核对（shasum -a 256 -c SHA256SUMS.txt）。"
             echo "签名：macOS 版为 ad-hoc 签名，未经 Developer ID 签名与 Apple 公证；Windows 便携包未签名。"
           } > notes.md
-          gh release create "v$VERSION" assets/* --draft --verify-tag \
-            --title "Chamo $VERSION" --notes-file notes.md
+          # Refresh an existing draft (e.g. after a failed upload) instead of
+          # failing; a release that is already published is never touched.
+          if gh release view "v$VERSION" --json isDraft -q .isDraft > state.txt 2>/dev/null; then
+            [ "$(cat state.txt)" = true ] || { echo "v$VERSION is already published; not modifying it"; exit 1; }
+            gh release upload "v$VERSION" release-assets/* --clobber
+            gh release edit "v$VERSION" --title "Chamo $VERSION" --notes-file notes.md
+            # Drop assets that are no longer part of the build (left by a broken run).
+            keep=$(cd release-assets && ls)
+            gh release view "v$VERSION" --json assets -q '.assets[].name' | while read -r name; do
+              printf '%s\n' "$keep" | grep -qxF "$name" || gh release delete-asset "v$VERSION" "$name" -y
+            done
+          else
+            gh release create "v$VERSION" release-assets/* --draft --verify-tag \
+              --title "Chamo $VERSION" --notes-file notes.md
+          fi
