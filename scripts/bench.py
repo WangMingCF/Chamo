@@ -39,6 +39,7 @@ import importlib.util
 import json
 import os
 import platform
+import signal
 import statistics
 import subprocess
 import sys
@@ -215,6 +216,71 @@ def recorded_pairs(report: dict) -> list:
     return pairs
 
 
+def child_environment() -> dict:
+    """The environment every measured child gets, so the report can be honest.
+
+    Command cases run in the same environment as engine cases; recording
+    CHAMO_PAGE_CACHE=0 for the whole report while letting command cases inherit
+    the caller's value would make the metadata describe something that did not
+    happen.
+    """
+    environment = dict(os.environ)
+    environment["CHAMO_PAGE_CACHE"] = "0"      # see the module docstring
+    environment["PYTHONIOENCODING"] = "utf-8"
+    return environment
+
+
+def _kill_tree(process) -> None:
+    """Kill the child *and its descendants*.
+
+    subprocess.run(timeout=...) kills only the direct child. Office conversions
+    start LibreOffice, and soffice.exe inherits the stdout/stderr pipes; it
+    survives the kill, keeps the write end open, and the follow-up drain never
+    sees EOF - the bench would hang instead of recording a timeout, exactly on the
+    slowest cases where a timeout is most likely.
+    """
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                           capture_output=True, timeout=30)
+        else:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _run(argv, timeout: int, env=None) -> dict:
+    """Run argv with a timeout whose *cleanup* is bounded too."""
+    started = time.monotonic()
+    extra = {}
+    if os.name == "nt":
+        extra["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        extra["start_new_session"] = True
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                               errors="replace", env=env, **extra)
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_tree(process)
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            # Something escaped the kill and still holds a pipe; report the
+            # timeout instead of waiting for an EOF that will not come.
+            stdout, stderr = "", ""
+    seconds = time.monotonic() - started
+    return {"seconds": timeout if timed_out else seconds, "timed_out": timed_out,
+            "rc": None if timed_out else process.returncode,
+            "stdout": stdout or "", "stderr": stderr or ""}
+
+
 def run_engine(inputs, out_dir: Path, operation: str, config: dict, timeout: int) -> dict:
     """Run engine/workbench.py as a subprocess and time it.
 
@@ -232,39 +298,24 @@ def run_engine(inputs, out_dir: Path, operation: str, config: dict, timeout: int
                           **config}}
     request_path = out_dir.parent / "request.json"
     request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
-    environment = dict(os.environ)
-    environment["CHAMO_PAGE_CACHE"] = "0"      # see the module docstring
-    environment["PYTHONIOENCODING"] = "utf-8"
-    started = time.monotonic()
-    try:
-        completed = subprocess.run([sys.executable, "-I", "-B", str(ENGINE),
-                                    "--request", str(request_path)],
-                                   capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", timeout=timeout, env=environment,
-                                   stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
+    result = _run([sys.executable, "-I", "-B", str(ENGINE), "--request", str(request_path)],
+                  timeout=timeout, env=child_environment())
+    if result["timed_out"]:
         return {"seconds": timeout, "timed_out": True, "rc": None, "stderr": "",
                 "output_bytes": 0, "outputs": 0}
-    seconds = time.monotonic() - started
     files = quality.deliverables(out_dir)
-    return {"seconds": seconds, "timed_out": False, "rc": completed.returncode,
-            "stderr": (completed.stderr or "").strip()[-1500:],
+    report = load_report(result["stdout"])
+    return {"seconds": result["seconds"], "timed_out": False, "rc": result["rc"],
+            "stderr": result["stderr"].strip()[-1500:],
             "output_bytes": sum(path.stat().st_size for path in files),
-            "outputs": len(files), "report": load_report(completed.stdout or ""),
-            "reported_outputs": len(recorded_pairs(load_report(completed.stdout or "")))}
+            "outputs": len(files), "report": report,
+            "reported_outputs": len(recorded_pairs(report))}
 
 
-def run_command(argv, timeout: int) -> dict:
-    started = time.monotonic()
-    try:
-        completed = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", timeout=timeout,
-                                   stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return {"seconds": timeout, "timed_out": True, "rc": None, "stderr": "",
-                "output_bytes": 0, "outputs": 0}
-    return {"seconds": time.monotonic() - started, "timed_out": False,
-            "rc": completed.returncode, "stderr": (completed.stderr or "").strip()[-800:],
+def run_command(argv, timeout: int, env=None) -> dict:
+    result = _run(argv, timeout=timeout, env=env)
+    return {"seconds": result["seconds"], "timed_out": result["timed_out"],
+            "rc": result["rc"], "stderr": result["stderr"].strip()[-800:],
             "output_bytes": 0, "outputs": 0}
 
 
@@ -277,16 +328,15 @@ def quality_issues(case: dict, corpus: Path, out_dir: Path, report: dict) -> lis
     if operation == "pdf_images":
         return quality.check_pdf_images(corpus / case["input"], out_dir, options.get("dpi", 150))
     if operation in ("image_convert", "image_compress"):
+        # The run's own config is the single source of truth for "may this lose
+        # detail" - case["quality"] only carries checker parameters such as dpi.
         config = case.get("config") or {}
+        lossy = config.get("format") in ("jpeg", "jpg") or bool(config.get("lossy"))
         if operation == "image_convert":
             mode = "convert"
-            # Whether a conversion may lose detail comes from the run, not from the
-            # file suffix: WebP exists in both forms and the engine writes it
-            # lossless unless the case asked for lossy.
-            lossy_target = config.get("format") in ("jpeg", "jpg") or bool(config.get("lossy"))
         else:
-            mode = "lossy" if config.get("lossy") else "lossless"
-            lossy_target = False
+            mode = "lossy" if lossy else "lossless"
+        lossy_target = lossy
         return quality.check_image_pairs(recorded_pairs(report), mode=mode,
                                          lossy_target=lossy_target)
     if operation == "pdf_split":
@@ -328,7 +378,11 @@ def check_office_pdf(source: Path, out_dir: Path, report: dict) -> list:
 # Aggregation
 # --------------------------------------------------------------------------
 def summarise(runs: list) -> dict:
-    times = [run["seconds"] for run in runs if not run.get("timed_out")]
+    # A run that timed out or exited non-zero measured something other than the
+    # work (start-up failure, a crash part-way through), so its number must not
+    # reach the median even when the case-level timing is already suppressed.
+    times = [run["seconds"] for run in runs
+             if not run.get("timed_out") and run.get("rc") == 0]
     if not times:
         return {"median_seconds": None, "min_seconds": None, "max_seconds": None,
                 "spread": None}
@@ -343,7 +397,8 @@ def run_case(case: dict, corpus: Path, work: Path, reps: int, timeout: int,
     name = case["name"]
     record = {"name": name, "operation": case.get("operation"), "runs": []}
     if case.get("kind") == "command":
-        record["runs"] = [run_command(case["argv"], timeout) for _ in range(reps)]
+        record["runs"] = [run_command(case["argv"], timeout, env=child_environment())
+                          for _ in range(reps)]
         record.update(summarise(record["runs"]))
         # A timeout is a failure, not a pass without a number: run_command reports
         # rc=None when it gives up, so "rc not in (0, None)" would accept it. The
@@ -426,7 +481,9 @@ def app_sizes(app: Path) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Measure Chamo on a fixed synthetic corpus")
     parser.add_argument("--suite", default="representative", choices=sorted(CASES))
-    parser.add_argument("--reps", type=int, default=3, help="repetitions per case (>=3)")
+    parser.add_argument("--reps", type=int, default=3,
+                        help="repetitions per case (default 3; fewer is allowed but "
+                             "the spread becomes unreliable and the report says so)")
     parser.add_argument("--corpus", default="", help="reuse a corpus instead of building one")
     parser.add_argument("--only", default="", help="run only cases whose name contains this")
     parser.add_argument("--json", default="", help="write the full report here")
@@ -436,6 +493,10 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.reps < 1:
         parser.error("--reps must be at least 1")
+    if args.app and not Path(args.app).expanduser().is_dir():
+        # Sizes silently come out as total_bytes 0 for a typo'd path, and the
+        # report then looks like a real measurement of an empty bundle.
+        parser.error("--app is not a directory: %s" % args.app)
     if args.reps < 3:
         print("note: --reps %d is below the 3 the plan requires for a reported number"
               % args.reps, file=sys.stderr)
@@ -503,9 +564,14 @@ def main(argv=None) -> int:
                  ("%.1f%%" % (record.get("spread") * 100)) if adopted and record.get("spread") is not None else "-",
                  record["status"]))
     if args.json:
-        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-                                   encoding="utf-8")
+        target = Path(args.json)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Write then rename: an interrupted run must not leave half a JSON file
+        # that later readers would take for a complete report.
+        temporary = target.with_name(target.name + ".tmp")
+        temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                              encoding="utf-8")
+        os.replace(temporary, target)
         print("report: %s" % args.json)
     if not args.keep:
         remove_tree(work)

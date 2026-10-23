@@ -120,3 +120,50 @@ def test_the_office_fixtures_really_render(tmp_path):
         "office-pdf.deck", "office-pdf.memo"}
     for case in report["cases"]:
         assert case["status"] == "PASS", (case["name"], case["quality"]["issues"])
+
+
+def test_image_quality_takes_lossiness_from_the_run_config():
+    """The case table must not be able to declare a run lossy in two places.
+
+    image-compress used to read config["lossy"] for the mode but keep a second
+    quality["lossy"] copy that nothing read; a case that set only the second one
+    would be judged pixel-exact and could never pass. This pins the decision to
+    the run's own config, for both image operations.
+    """
+    seen = []
+    original = bench.quality.check_image_pairs
+
+    def record(pairs, mode="lossless", lossy_target=False):
+        seen.append((mode, lossy_target))
+        return []
+
+    bench.quality.check_image_pairs = record
+    try:
+        for operation, config in (("image_compress", {"format": "jpeg", "lossy": True}),
+                                  ("image_compress", {"format": "png", "lossy": False}),
+                                  ("image_convert", {"format": "jpeg"}),
+                                  ("image_convert", {"format": "png"})):
+            bench.quality_issues({"operation": operation, "config": config},
+                                 ROOT, ROOT, {})
+    finally:
+        bench.quality.check_image_pairs = original
+
+    assert seen == [("lossy", True), ("lossless", False),
+                    ("convert", True), ("convert", False)], seen
+
+
+def test_a_timed_out_run_really_ends_instead_of_hanging():
+    """A killed child that left a grandchild holding the pipe must not block us.
+
+    subprocess.run(timeout=...) kills only the direct child; the grandchild keeps
+    the write end of the pipe open and the drain waits for an EOF that never
+    comes. The engine does exactly this whenever an office conversion has started
+    LibreOffice, so the timeout has to take the whole tree down.
+    """
+    script = ("import subprocess, sys, time; "
+              "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
+              "time.sleep(30)")
+    result = bench._run([sys.executable, "-c", script], timeout=3)
+    assert result["timed_out"] is True
+    assert result["rc"] is None
+    assert result["seconds"] == 3, result["seconds"]
