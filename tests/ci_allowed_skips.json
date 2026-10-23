@@ -96,6 +96,11 @@
       "file": "tests/test_page_resume.py",
       "reason": "POSIX-only signals/process-group/ps (SIGINT, SIGKILL, os.killpg, ps); Windows CI runs the complete-run gates",
       "why": "kill/interrupt scenarios need POSIX signals"
+    },
+    {
+      "file": "tests/test_staging_cleanup.py",
+      "reason": "symlink creation needs privileges on Windows; see ci_allowed_skips.json",
+      "why": "the same path-containment check is exercised on Linux and macOS; Windows needs SeCreateSymbolicLinkPrivilege which hosted runners do not grant"
     }
   ]
 }
