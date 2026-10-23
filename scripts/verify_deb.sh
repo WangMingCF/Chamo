@@ -42,6 +42,16 @@ echo "installing $(basename "$DEB") for version $VERSION on $ARCH"
 if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=; fi
 $SUDO dpkg -i "$DEB" >/dev/null 2>&1; check "install" "$?" "0"
 check "chamo on PATH" "$(command -v chamo)" "/usr/bin/chamo"
+# The venv's C extensions are cpython-3X builds and bin/python3 is a symlink to the
+# host interpreter, so the declared Depends must name the same minor version. A
+# loose ">= 3.10" installed on a python3.11 host and then failed on first use with
+# "ImportError: cannot import name '_imaging' from 'PIL'". Read both facts from the
+# archive itself rather than from the build tree.
+MINOR=$(dpkg-deb -c "$DEB" 2>/dev/null | sed -n 's#.*lib/python\(3\.[0-9]*\)/site-packages.*#\1#p' | head -1)
+if [ -z "$MINOR" ]; then echo "FAIL cannot read the bundled Python version out of $DEB"; fail=1; fi
+DEPENDS=$(dpkg-deb -f "$DEB" Depends 2>/dev/null)
+check "declared Python minor matches the wheels (${MINOR:-unknown})" \
+      "$(printf '%s' "$DEPENDS" | grep -c "python3 (>= ${MINOR:-none})")" "1"
 T=$(mktemp -d)
 chamo $ROOT/tests/fixtures/示例讲义.pdf -o "$T/pdf" -t pdf-images --range 1-3 --quiet 2>/dev/null
 check "pdf to images" "$?" "0"
