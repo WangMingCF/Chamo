@@ -69,7 +69,7 @@ def read_runs(files: list[Path]) -> list[dict[str, dict]]:
     return runs
 
 
-def analyse(runs: list[dict[str, dict]], allowed: list[dict]) -> dict:
+def analyse(runs: list[dict[str, dict]], allowed: list[dict], repeated: bool = False) -> dict:
     outcomes: dict[str, list[str]] = defaultdict(list)
     for run in runs:
         for tid, info in run.items():
@@ -101,11 +101,14 @@ def analyse(runs: list[dict[str, dict]], allowed: list[dict]) -> dict:
             seconds[tid] = max(seconds[tid], info["seconds"])
     return {"failed": failed, "flaky": flaky, "unexpected": unexpected, "allowed_hits": allowed_hits,
             "messages": messages, "slowest": sorted(seconds.items(), key=lambda kv: -kv[1])[:8],
-            "empty": not outcomes}
+            "empty": not outcomes,
+            "incomplete": [f"run {i}: no tests" for i, run in enumerate(runs, 1) if not run]
+                + (["test selection changed between repeated runs"]
+                   if repeated and runs and any(set(run) != set(runs[0]) for run in runs[1:]) else [])}
 
 
 def render(title: str, runs: list[dict[str, dict]], result: dict) -> str:
-    ok = not (result["failed"] or result["flaky"] or result["unexpected"] or result["empty"])
+    ok = not (result["failed"] or result["flaky"] or result["unexpected"] or result["empty"] or result["incomplete"])
     lines = [f"### {'✅' if ok else '❌'} {title}", "",
              "| 第几次运行 | 通过 | 失败 | 跳过 | 用时（秒） |", "| --- | --- | --- | --- | --- |"]
     for i, run in enumerate(runs, 1):
@@ -114,6 +117,8 @@ def render(title: str, runs: list[dict[str, dict]], result: dict) -> str:
             count[info["outcome"]] += 1
         total = sum(info["seconds"] for info in run.values())
         lines.append(f"| {i} | {count['passed']} | {count['failed']} | {count['skipped']} | {total:.0f} |")
+    if result["incomplete"]:
+        lines += ["", "**运行证据不完整**", ""] + [f"- {reason}" for reason in result["incomplete"]]
     if result["empty"]:
         lines += ["", "**没有任何测试运行**：空结果不算通过。"]
     for key, label in (("failed", "失败（每次运行都失败）"), ("flaky", "不稳定（有的运行失败、有的通过）")):
@@ -136,18 +141,31 @@ def main() -> int:
     ap.add_argument("--skips", type=Path, help="allowed-skips JSON (tests/ci_allowed_skips.json)")
     ap.add_argument("--title", default="")
     ap.add_argument("--summary", type=Path, default=os.environ.get("GITHUB_STEP_SUMMARY") or None)
+    ap.add_argument("--expected-runs", type=int, help="expected number of independent runs")
+    ap.add_argument("--exit-codes-dir", type=Path, help="require <XML stem>.exit for every run")
     ap.add_argument("xml", nargs="+", type=Path)
     a = ap.parse_args()
 
     present = [p for p in a.xml if p.is_file()]
     runs = read_runs(present)
-    result = analyse(runs, load_allowed(a.skips, a.platform))
+    result = analyse(runs, load_allowed(a.skips, a.platform), repeated=a.expected_runs is not None)
+    # A successful sibling run must never hide a crashed or absent repetition.
+    result["incomplete"] += [f"missing XML: {p.name}" for p in a.xml if not p.is_file()]
+    if len({p.resolve() for p in a.xml}) != len(a.xml):
+        result["incomplete"].append("duplicate XML input")
+    if a.expected_runs is not None and (a.expected_runs < 1 or len(present) != a.expected_runs):
+        result["incomplete"].append(f"expected {a.expected_runs} runs, received {len(present)}")
+    if a.exit_codes_dir is not None:
+        for path in a.xml:
+            code = a.exit_codes_dir / (path.stem + ".exit")
+            if not code.is_file() or code.read_text().strip() != "0":
+                result["incomplete"].append(f"nonzero or missing process exit: {code.name}")
     text = render(a.title or f"测试结果（{a.platform}）", runs, result)
     print(text)
     if a.summary:
         with open(a.summary, "a", encoding="utf-8") as f:
             f.write(text + "\n")
-    return 1 if (result["failed"] or result["flaky"] or result["unexpected"] or result["empty"]) else 0
+    return 1 if (result["failed"] or result["flaky"] or result["unexpected"] or result["empty"] or result["incomplete"]) else 0
 
 
 if __name__ == "__main__":

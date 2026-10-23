@@ -8,6 +8,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # 密钥与证书
 .env
@@ -37,3 +41,6 @@ local/
 artifacts/
 research/
 design/
+
+# 私有持续开发规范、部署与交接记录
+.development/

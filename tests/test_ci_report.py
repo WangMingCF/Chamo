@@ -26,8 +26,10 @@ def junit(path: Path, cases: list[tuple[str, str, str]]) -> Path:
     return path
 
 
-def run(tmp: Path, platform: str, *xml: Path, skips: dict | None = None):
+def run(tmp: Path, platform: str, *xml: Path, skips: dict | None = None, repeat: int | None = None):
     args = [sys.executable, str(REPORT), "--platform", platform, "--summary", str(tmp / "summary.md")]
+    if repeat is not None:
+        args += ["--expected-runs", str(repeat)]
     if skips is not None:
         (tmp / "skips.json").write_text(json.dumps(skips), encoding="utf-8")
         args += ["--skips", str(tmp / "skips.json")]
@@ -92,3 +94,40 @@ def test_the_repository_allowlist_is_well_formed():
         for e in data[platform]:
             assert e["file"].startswith("tests/") and (ROOT / e["file"]).is_file(), e
             assert (e.get("reason") or e.get("reason_prefix")) and e["why"], e
+
+
+def test_success_does_not_hide_missing_or_empty_repetition(tmp_path):
+    good = junit(tmp_path / "a.xml", [("t1", "passed", "")])
+    for other in [tmp_path / "missing.xml", junit(tmp_path / "empty.xml", [])]:
+        result = run(tmp_path, "linux", good, other)
+        assert result.returncode == 1 and "运行证据不完整" in result.stdout
+
+
+def test_repeated_selection_cannot_silently_lose_a_test(tmp_path):
+    first = junit(tmp_path / "a.xml", [("t1", "passed", ""), ("t2", "passed", "")])
+    second = junit(tmp_path / "b.xml", [("t1", "passed", "")])
+    assert run(tmp_path, "linux", first, second, repeat=2).returncode == 1
+
+
+def test_expected_repetitions_and_real_exit_codes(tmp_path):
+    xml = junit(tmp_path / "run-1.xml", [("t1", "passed", "")])
+    args = [sys.executable, str(REPORT), "--platform", "linux", "--exit-codes-dir", str(tmp_path)]
+    def result(count):
+        return subprocess.run(args + ["--expected-runs", str(count), str(xml)], capture_output=True).returncode
+    assert result(1) == 1  # XML alone does not prove the process finished.
+    (tmp_path / "run-1.exit").write_text("2\n")
+    assert result(1) == 1
+    (tmp_path / "run-1.exit").write_text("0\n")
+    assert result(1) == 0
+    assert result(2) == 1
+    assert run(tmp_path, "linux", xml, xml).returncode == 1
+
+
+def test_different_ui_suites_can_share_a_summary():
+    # cross-platform combines browser and native macOS XML, not repetitions.
+    import tempfile
+    with tempfile.TemporaryDirectory() as folder:
+        tmp = Path(folder)
+        browser = junit(tmp / "browser.xml", [("browser", "passed", "")])
+        native = junit(tmp / "native.xml", [("native", "passed", "")])
+        assert run(tmp, "macos", browser, native).returncode == 0

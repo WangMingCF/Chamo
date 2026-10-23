@@ -66,7 +66,7 @@ Chamo 不收集任何数据。检查更新默认关闭；只有你手动检查�
 
 ## 开发
 
-构建、测试与项目结构见 [开发说明](docs/DEVELOPMENT.md)。
+构建、测试与项目结构见 [开发说明](docs/DEVELOPMENT.md)。需求集中在 [提案总目录](proposals/INDEX.md)；其他资料见 [文档目录](docs/DEVELOPMENT.md)。
 
 ## 许可证
 

@@ -2,15 +2,15 @@
 
 本文件规定 Chamo 的功能测试在哪里跑、怎么判定、新功能必须补什么。开发 Agent、评审和维护者都以它为准；改动测试体系时同步更新本文件。
 
-**前提：开发 Agent 运行在只有开发能力的容器里，本地不跑测试。GitHub Actions 就是唯一的测试环境。** 本地"通过"不算数。CI 全绿只说明下文"已覆盖"的部分没有回退；没覆盖的部分必须按第 7 节另外验收。
+Mac-DSH、Mac-Claude、NAS-DSH 均可在具备依赖的隔离环境运行适用测试，并负责调度跨平台 CI。真机验收由 Mac 端执行。每份结果标明执行端、准确 SHA、平台与命令，本地通过不能替代其他平台的必需检查。CI 全绿只说明下文"已覆盖"的部分没有回退；没覆盖的部分必须按第 7 节另外验收。
 
 ## 1. 三类工作流
 
 | 工作流 | 何时运行 | 作用 |
 | --- | --- | --- |
-| `cross-platform` | 每个 PR、每次推送到 main | 合并门禁：三端引擎测试、打包后转换、Swift 编译与单测、自循环工具测试；汇总为一项检查 `all checks` |
-| `agent-review` | PR 打开或更新时 | 独立评审：用另一个模型审 diff，并做服务端隐私与提交身份检查，结果写成提交状态 `agent-review` |
-| `test-matrix` | 手动触发（含 `scripts/ci_remote_test.sh`）；每晚一次 | 按需在任意平台跑任意测试、可重复运行找不稳定测试；夜间在更多系统版本和 arm64 上把全套跑 3 遍 |
+| `cross-platform` | 每个 PR、每次推送到 main | 合并门禁：三端引擎测试、打包后转换、Swift 编译与单测、CI 工具测试；汇总为一项检查 `all checks` |
+| `agent-review` | PR 打开或更新时 | 未参与实现的另一执行端独立读取完整源码、调用链和测试并实际验证；GitHub 校验签名、head/base、隐私及提交身份后写入 `agent-review`。流程见 [评审入口](../scripts/ci/README.md) |
+| `test-matrix` | 按需触发（含 `scripts/ci_remote_test.sh`） | 按需在任意平台跑任意测试、可重复运行找不稳定测试；负责人根据改动和历史不稳定范围选择平台与轮次，不做无变化的固定全量重复 |
 
 main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`。
 
@@ -25,7 +25,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 | `windows package` | Windows x64 | 构建便携 zip，解压后转换，并驱动打包后的本机界面 |
 | `swift (macos-15)` | macOS arm64 | 编译 macOS 应用（正式版与 `CHAMO_DEBUG` 版）和 HEIC 辅助程序；运行 Swift 单测（`tests/*Tests.swift`） |
 | `ui (ubuntu-latest / windows-latest / macos-15)` | 三端 | 界面自动化：Playwright 驱动 `chamo ui` 真实页面（三端），macOS 上再用调试钩子剧本驱动原生应用；断言落到输出文件上，固定画面与基准截图比对。约定见 `uitests/README.md` |
-| `ops scripts` | Linux x64 | 自循环工具：隐私扫描、评审 API 客户端测试、shellcheck |
+| `ops scripts` | Linux x64 | CI 工具：隐私扫描、签名审查证据验证测试、shellcheck |
 | `all checks` | Linux x64 | 只有上面每个作业都成功才通过；任何一个被跳过或取消也算失败 |
 
 三个平台的引擎作业共用 `.github/actions/setup-engine`：Python 3.12、`third_party/requirements.lock` 锁定的依赖（带 pip 缓存）和真实的 LibreOffice。`test-matrix` 用的也是同一个环境。
@@ -37,7 +37,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 - **失败**：测试失败或出错。
 - **不稳定**：重复运行时，同一个测试有时失败、有时通过。
 - **未登记的跳过**：跳过不等于通过。每个平台允许的跳过登记在 `tests/ci_allowed_skips.json`，按文件和跳过原因完全匹配（`reason`），并写明理由（`why`）；原因里带实测数值的，才用前缀匹配（`reason_prefix`）。登记时以源码中的原因为准：pytest 日志末尾的跳过汇总可能被截断。
-- **空结果**：一个测试都没运行。
+- **不完整结果**：任何 XML 缺失或为空、重复传入、预期轮数不足、重复选择中的测试消失，或真实进程退出码非零/缺失。浏览器与原生 UI 的不同套件可以汇总，只有明确重复运行才要求测试集合相同。
 
 新增一条合理的跳过时，必须同时有在该平台真正运行、覆盖同一行为的测试，并在 PR 里说明。
 
@@ -54,7 +54,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 
    脚本会触发 `test-matrix`、等待结束、打印各平台汇总，退出码就是结论。`test-matrix.yml` 要先合并到 main 才能被手动触发；之后用 `--ref` 可以测任何分支。
 3. 开 PR 后看 `all checks` 与 `agent-review`。失败时用 `gh run view <id> --log-failed` 看日志，或用 `gh run download <id>` 下载 JUnit XML 与汇总。
-4. 令牌需要 Actions 读写权限才能触发运行（见 `ops/agent-loop/README.md`）。
+4. 令牌需要 Actions 读写权限才能触发运行。
 
 ## 5. 新功能必须补的测试
 
@@ -66,23 +66,23 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
    - 失败路径各至少一条：加密、损坏、同名冲突（不覆盖）、取消、中断后续跑；涉及磁盘空间的加低磁盘用例。
    - 原件不变：处理前后对原件做哈希比对。
 2. **平台差异**：只在某个平台成立的行为用 `pytest.mark.skipif` 并写明原因，登记到 `tests/ci_allowed_skips.json`；同时必须有在该平台真正运行的用例。
-3. **并发、取消与时序**：这类测试先用 `ci_remote_test.sh --repeat 5` 在三端各跑 5 遍，全部通过再提交 PR，避免把不稳定测试带进门禁。
+3. **并发、取消与时序**：先提交需求 Draft PR，再用 `ci_remote_test.sh --repeat 5` 在适用平台验证候选实现；真实结果通过后才进入合并，不能为规避失败而反复重跑。
 4. **打包后的行为**：功能需要新依赖或新文件时，把它加进 `linux package` / `windows package` 作业的转换步骤，证明安装后的产物也能用；macOS 打包见第 6 节。
-5. **Swift 逻辑**：界面以外的纯逻辑（解析、校验、版本比较等）抽成独立文件，在 `tests/` 下写 `XxxTests.swift`，并在 `cross-platform.yml` 的 `swift` 作业里注册。这一步改的是 `.github/`，属于受保护路径，PR 需要维护者审核。
+5. **Swift 逻辑**：界面以外的纯逻辑（解析、校验、版本比较等）抽成独立文件，在 `tests/` 下写 `XxxTests.swift`，并在 `cross-platform.yml` 的 `swift` 作业里注册。CI 改动也需要独立完整代码审查及对应工作流验证。
 6. **界面**：用户能看到的改动，在 `uitests/` 里补端到端用例。浏览器界面写在 `uitests/browser`；macOS 应用写成 `uitests/macos` 里的 JSON 剧本（需要新动作时扩展 `Sources/DebugHooks.swift` 的 `Scenario`）。画面有意变化时，按 `uitests/README.md` 更新基准截图。
 7. **CLI 与浏览器界面**：新操作要同时出现在 `chamo` CLI 和 `chamo ui` 里，或在文档中写明某端不支持；`tests/test_cli.py`、`tests/test_ui.py` 补对应用例。
 
-## 6. 已规划、尚未实现的 CI
+## 6. 包体、发布与质量验证
 
-| 项 | 计划 | 归属版本 |
-| --- | --- | --- |
-| macOS `.app`/DMG 打包与包内冒烟（`bootstrap_dependencies.py` → `build_app.py` → `package_dmg.py` → `packaged_smoke.py`） | tag 触发的 `release.yml`，也可每晚运行 | ITERATION_PLAN 第 0 轮 |
-| Release 资产校验（下载、SHA-256、隐私扫描、干净安装与转换） | `release.yml` | 第 0 轮 |
-| 性能基准冒烟（只报告，不卡门禁） | 固定语料、关闭页缓存、记录波动 | 0.2.0 |
-| 质量检查器（渲染比对、SSIM、文字层） | 被各功能测试复用 | 0.2.0 |
-| 打包后的界面测试（用安装后的 deb、zip、`.app` 跑 `uitests`） | `CHAMO_UI_COMMAND` 已支持指定已安装的 `chamo` | 第 0 轮之后 |
+| 项 | 实际状态与验收要求 |
+| --- | --- |
+| macOS `.app`/DMG | release.yml 已实现构建、挂载安装和包内 smoke；每个候选引用准确运行与资产，不代表签名/公证或干净系统已验收 |
+| Linux/Windows 发布包 | 已有安装/解包后转换；发布前扫描项目文本、核对版本与 SHA-256 |
+| Release | 已有 v0.1.0；后续候选由负责人触发构建、核对必要真机结果后正式发布，再下载验证 |
+| 质量检查器 | bench_quality.py 已在主干；有像素、页数、文本/哈希检查，仍需针对各操作补反例并接入包体验收 |
+| 性能基准与打包 UI | 以具体 PR、CI 和产物的证据判定；存在源码测试不能自动推定已安装包通过 |
 
-这些作业落地前，相关内容一律视为"未经 CI 验证"。
+100% 单测行与分支覆盖是目标。当前 .coveragerc 只是 Python 引擎混合路径报告，不能声称全语言纯单测已达标；保留分母和缺口，逐项补测，覆盖率也不能代替用户流程、平台及最终包体验收。
 
 ## 7. CI 覆盖不到、必须另外验收的部分
 
@@ -113,7 +113,13 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 python3 -m pip install -r third_party/requirements.lock
 python3 -m pytest tests -q -rs -x --junitxml=results.xml
 python3 scripts/ci_report.py --platform macos --skips tests/ci_allowed_skips.json results.xml
-python3 -m pytest ops/agent-loop -q
+python3 -m pytest scripts/ci -q
 ```
 
 Swift 的编译与单测命令见 `.github/workflows/cross-platform.yml` 的 `swift` 作业。
+
+## 11. 覆盖率目标与当前报告
+
+最终目标是100%单测行与分支覆盖率，不能因此删测、弱化断言或缩小统计范围。存量缺口需要记录并持续补齐；覆盖率本身不能保证功能正确，仍需以上真实转换、平台、界面与包体验证。
+
+当前工作区的覆盖率改造是报告阶段：`.coveragerc` 默认统计 Python 引擎，`fail_under = 0`；引擎作业运行的测试包含集成路径，因此不能称为全量单测覆盖率，也不包含 Swift、UI 和安装包作业。尚未建立全量100%门禁，不得宣称已达标。报告、实际门禁与最终目标必须分别说明。

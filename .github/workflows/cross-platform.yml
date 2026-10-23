@@ -34,10 +34,19 @@ jobs:
           - os: macos-latest
             label: macos
     runs-on: ${{ matrix.os }}
+    env:
+      COVERAGE_RCFILE: ${{ github.workspace }}/.coveragerc
+      CHAMO_COVERAGE_SOURCE: ${{ github.workspace }}/engine
+      CHAMO_COVERAGE_DATA: ${{ github.workspace }}/build/coverage/.coverage
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-engine
+
+      - name: Install pinned coverage reporter
+        # CI-only tooling; do not add it to packaged engine dependencies.
+        shell: bash
+        run: python -m pip install coverage==7.10.6
 
       - name: Show renderer discovery
         shell: bash
@@ -117,7 +126,7 @@ jobs:
         # goes green regardless. The exit code is asserted explicitly below.
         run: |
           set -o pipefail
-          python -m pytest tests -q -rs -x --tb=short --junitxml=pytest-results.xml 2>&1 | tee pytest.log
+          python -m coverage run -m pytest tests -q -rs -x --tb=short --junitxml=pytest-results.xml 2>&1 | tee pytest.log
           status=${PIPESTATUS[0]}
           echo "pytest exit: $status"
           exit $status
@@ -131,6 +140,33 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python scripts/ci_report.py --platform ${{ matrix.label }} --skips tests/ci_allowed_skips.json --title "engine (${{ matrix.os }})" pytest-results.xml
+
+      - name: Collect observed engine line and branch coverage
+        # No percentage gate. Failure here cannot turn a failed test/skip gate green.
+        # Data is partial if -x stopped early or a child was killed before flushing.
+        if: always()
+        shell: bash
+        run: |
+          python -m coverage combine --keep
+          python -m coverage report | tee build/coverage/summary.txt
+          python -m coverage xml
+          python -m coverage json
+          python -m coverage html
+          {
+            echo '### Observed Python engine coverage (report only)'
+            echo 'Not exhaustive: excludes Swift/UI/package jobs; killed, os._exit or exec children can lose data. Review must assess functional gaps.'
+            echo '```text'
+            cat build/coverage/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.label }}
+          path: build/coverage/
+          if-no-files-found: warn
 
       - name: Upload test log
         if: always()
@@ -308,15 +344,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Privacy scan tests
+      - name: Validate PR-first proposal catalog
+        run: python scripts/check_proposals.py
+
+      - name: Proposal, privacy and review evidence tests
         run: |
           python -m pip install pytest==9.1.1
-          python -m pytest ops/agent-loop -q -rs
+          python -m pytest scripts/ci tests/test_proposals.py -q -rs
 
       - name: Shell scripts
         run: |
-          shellcheck -x ops/agent-loop/*.sh ops/agent-loop/hooks/pre-push
-          for f in ops/agent-loop/*.sh; do bash -n "$f"; done
+          shellcheck -x scripts/ci/hooks/pre-push scripts/ci_remote_test.sh scripts/ui_baselines.sh
+          bash -n scripts/ci_remote_test.sh
+          bash -n scripts/ui_baselines.sh
 
   ui:
     name: ui (${{ matrix.os }})
@@ -339,6 +379,25 @@ jobs:
       CHAMO_UI_ARTIFACTS: ${{ github.workspace }}/build/ui-artifacts
     steps:
       - uses: actions/checkout@v4
+
+      - name: Use the Ubuntu archive for UI dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        # Two runs exhausted this job's 40-minute limit downloading from the
+        # Azure mirror, before any UI tests started. Keep suites, components,
+        # signing keys and packages intact; only change that runner mirror.
+        run: |
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for path in (Path('/etc/apt/sources.list'), Path('/etc/apt/sources.list.d/ubuntu.sources')):
+              if path.is_file():
+                  original = path.read_text()
+                  updated = re.sub(r'https?://azure\.archive\.ubuntu\.com/ubuntu(?=/|\s|$)',
+                                   'https://archive.ubuntu.com/ubuntu', original)
+                  if updated != original:
+                      path.write_text(updated)
+          PY
 
       - uses: ./.github/actions/setup-engine
 

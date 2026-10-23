@@ -1,4 +1,4 @@
-"""Checks for privacy_scan.py. Run: python3 -m pytest ops/agent-loop -q"""
+"""Checks for privacy_scan.py. Run: python3 -m pytest scripts/ci -q"""
 from __future__ import annotations
 
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 
 SCAN = Path(__file__).with_name("privacy_scan.py")
 SECRET = "Zhang Synthetic"  # a made-up value standing in for a private identifier
-ID = ["-c", "user.name=DeepSeek Harness", "-c", "user.email=dsh@chamo.invalid"]
+ID = ["-c", "user.name=Chamo", "-c", "user.email=dev@chamo.invalid"]
 
 
 def run(*args, stdin="", cwd=None, keywords=None):
@@ -96,3 +96,29 @@ def test_files_scans_zip_members(tmp_path):
         f.writestr("doc/readme.txt", "built by zhang synthetic")
     p = run("files", str(z), keywords=kw)
     assert p.returncode == 1 and "readme.txt" in p.stderr
+
+
+def test_existing_branch_merge_excludes_only_published_history(tmp_path):
+    kw, r = keywords(tmp_path), repo(tmp_path)
+    def git(*args):
+        return subprocess.check_output(['git', *ID, *args], cwd=r, text=True).strip()
+    commit(r,'base.txt','clean')
+    base=git('rev-parse','HEAD')
+    git('checkout','-q','-b','feature')
+    commit(r,'feature.txt','clean')
+    remote=git('rev-parse','HEAD')
+    git('update-ref','refs/remotes/origin/feature',remote)
+    git('checkout','-q','main')
+    commit(r,'published.txt','already published',identity=['-c','user.name=Platform','-c','user.email=platform@example.invalid'])
+    git('update-ref','refs/remotes/origin/main',git('rev-parse','HEAD'))
+    git('checkout','-q','feature')
+    git('merge','--no-edit','main')
+    def push():
+        line=f"refs/heads/feature {git('rev-parse','HEAD')} refs/heads/feature {remote}\n"
+        return run('push',stdin=line,cwd=r,keywords=kw)
+    assert push().returncode==0
+    commit(r,'new.txt',SECRET)
+    assert push().returncode==1
+    git('reset','--hard','HEAD~1')
+    commit(r,'new.txt','safe',identity=['-c','user.name=Wrong','-c','user.email=wrong@example.invalid'])
+    assert push().returncode==1
