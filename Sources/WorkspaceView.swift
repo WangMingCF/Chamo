@@ -162,18 +162,27 @@ struct FileTable: View {
         // Row numbers are looked up once per render, not per cell (large batches stay O(n)).
         let order = m.tool.ordered ? Dictionary(uniqueKeysWithValues: m.items.enumerated().map { ($1.id, $0 + 1) }) : [:]
         return Table(of: QueueItem.self, selection: $m.selection, sortOrder: $sortOrder) {
+            // Sizing is measured, not guessed, and the table stops scrolling only when
+            // every column has an upper bound: at a 1024-point window the sidebar and
+            // the inspector leave about 498 points, of which the table spends a few on
+            // its own insets. CI screenshots drove four attempts - the original ideals
+            // (360+72+80+120+200) overflowed, capping the four narrow columns while the
+            // name column stayed unbounded still pushed the status column out, and a
+            // 484-point total still showed a horizontal scroller. The limits below sum
+            // to 448 (180+52+60+60+96), which fits with the status text complete; the
+            // name column truncates in the middle and carries the full path as a tooltip.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
-                .width(min: 220, ideal: 360)
+                .width(min: 110, ideal: 150, max: 180)
             TableColumn("页数", value: \.sortPages) { item in
                 Text(pagesText(item)).foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 56, ideal: 72)
+            }.width(min: 44, ideal: 48, max: 52)
             TableColumn("大小", value: \.size) { item in
                 Text(item.size > 0 ? ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file) : "—").foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 60, ideal: 80)
+            }.width(min: 52, ideal: 56, max: 60)
             TableColumn("结果", value: \.sortResult) { item in ResultCell(item: item, compare: m.operation.hasPrefix("image_") || m.operation == "pdf_compress") }
-                .width(min: 70, ideal: 120)
+                .width(min: 52, ideal: 56, max: 60)
             TableColumn("状态") { item in StatusCell(item: item, reason: m.incompatibility(item)) }
-                .width(min: 120, ideal: 200)
+                .width(min: 84, ideal: 90, max: 96)
         } rows: {
             // Merge tools follow list order, so rows can be dragged into place.
             // Rows carry their id (for merge reordering) and, once converted, the result
