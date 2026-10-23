@@ -32,7 +32,11 @@ def fake_soffice(monkeypatch, tmp_path):
     monkeypatch.setattr(workbench.platform_office, "runnable", lambda path: True)
     calls = []
 
-    def fake_run(argv, **kwargs):
+    class Done:
+        def __init__(self, argv): self.argv = argv
+        def communicate(self, timeout=None): return b"", b""
+
+    def fake_spawn(argv, **kwargs):
         calls.append([Path(a).name for a in argv if not a.startswith("-") and Path(a).suffix])
         outdir = Path(argv[argv.index("--outdir") + 1])
         for name in argv[argv.index("pdf") + 1:]:
@@ -41,9 +45,9 @@ def fake_soffice(monkeypatch, tmp_path):
             source = Path(name)
             if source.suffix and not source.name.startswith("lost"):
                 _pdf(outdir / (source.stem + ".pdf"))
-        return subprocess.CompletedProcess(argv, 0, b"", b"")
+        return Done(argv)
 
-    monkeypatch.setattr(workbench.subprocess, "run", fake_run)
+    monkeypatch.setattr(workbench, "spawn_group", fake_spawn)
     yield {"soffice": str(exe)}, calls
     workbench.office_batch_clear()
 
@@ -79,19 +83,28 @@ def test_name_clashes_and_files_that_are_not_what_their_suffix_says_are_never_ba
 
 def test_a_batch_that_times_out_falls_back_and_does_not_fail_the_run(monkeypatch, fake_soffice, tmp_path):
     cfg, calls = fake_soffice
-    real = workbench.subprocess.run
+    real = workbench.spawn_group
     state = {"n": 0}
+    killed = []
+
+    class Hangs:
+        def communicate(self, timeout=None):
+            if timeout == 30 or killed:
+                return b"", b""
+            raise subprocess.TimeoutExpired("soffice", 1)
 
     def flaky(argv, **kwargs):
         state["n"] += 1
         if state["n"] == 1:
-            raise subprocess.TimeoutExpired(argv, 1)
+            return Hangs()
         return real(argv, **kwargs)
 
-    monkeypatch.setattr(workbench.subprocess, "run", flaky)
+    monkeypatch.setattr(workbench, "spawn_group", flaky)
+    monkeypatch.setattr(workbench, "kill_tree", lambda proc: killed.append(proc))
     files = [_zip(tmp_path / f"d{i}.pptx") for i in range(4)]
     workbench.office_batch_prepare([*map(str, files)], cfg, 2)
     assert set(workbench.BATCH_PDFS) == {str(files[2]), str(files[3])}
+    assert len(killed) == 1, "a timed-out batch must have its whole process tree killed"
 
 
 def test_cancel_stops_before_the_next_batch(fake_soffice, tmp_path):
@@ -106,6 +119,7 @@ def test_office_pdf_uses_the_batched_pdf_without_starting_soffice(monkeypatch, f
     source = _zip(tmp_path / "deck.pptx")
     workbench.office_batch_prepare([str(source)], cfg, 2)
     monkeypatch.setattr(workbench.subprocess, "run", lambda *a, **k: pytest.fail("soffice was started again"))
+    monkeypatch.setattr(workbench, "spawn_group", lambda *a, **k: pytest.fail("soffice was started again"))
     work = tmp_path / "work"
     work.mkdir()
     pdf = workbench.office_pdf(source, work, cfg)
@@ -119,3 +133,52 @@ def test_clear_removes_the_scratch_folder_and_forgets_the_results(fake_soffice, 
     assert scratch is not None and scratch.is_dir()
     workbench.office_batch_clear()
     assert not scratch.exists() and not workbench.BATCH_PDFS
+
+
+def test_a_timed_out_batch_leaves_no_grandchild_behind(monkeypatch, tmp_path):
+    """The real process tree: a launcher that starts a long-running child, then hangs.
+
+    This is the Linux/Windows shape of soffice (a launcher in front of the renderer);
+    killing only the direct child would leave the grandchild running.
+    """
+    import time
+
+    marker = tmp_path / "grandchild.pid"
+    launcher = tmp_path / "launcher.py"
+    launcher.write_text(
+        "import subprocess, sys, time, pathlib\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "time.sleep(60)\n", encoding="utf-8")
+    monkeypatch.setattr(workbench.platform_office, "runnable", lambda path: True)
+    real = workbench.spawn_group
+
+    def through_launcher(argv, **kwargs):
+        return real([sys.executable, str(launcher), str(marker)], **kwargs)
+
+    monkeypatch.setattr(workbench, "spawn_group", through_launcher)
+    source = _zip(tmp_path / "d.pptx")
+    started = time.time()
+    workbench.office_batch_prepare([str(source)], {"soffice": str(launcher), "timeout": 2}, 2)
+    assert time.time() - started < 30
+    workbench.office_batch_clear()
+    pid = int(marker.read_text())
+    deadline = time.time() + 10
+    alive = True
+    while time.time() < deadline:
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+                alive = bool(handle)
+                if handle:
+                    ctypes.windll.kernel32.CloseHandle(handle)
+            else:
+                import os
+                os.kill(pid, 0)
+        except OSError:
+            alive = False
+        if not alive:
+            break
+        time.sleep(0.2)
+    assert not alive, "the launcher's child survived the batch timeout"

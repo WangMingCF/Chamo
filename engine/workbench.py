@@ -916,10 +916,22 @@ def _office_batch_run(sources, cfg, size, cancelled):
         if cancelled():return
         chunk=candidates[start:start+size]
         target=BATCH_DIR/f'out-{number}';target.mkdir()
+        # spawn_group puts soffice and everything it starts (oosplash, soffice.bin) in one
+        # group, so a timeout reaches all of them: killing only the direct child leaves
+        # the real renderer running on Linux and Windows, where `soffice` is a launcher.
         try:
-            subprocess.run([str(exe),'-env:UserInstallation='+(BATCH_DIR/f'profile-{number}').as_uri(),'--headless','--nologo','--nodefault','--nofirststartwizard','--norestore','--convert-to','pdf','--outdir',str(target),*map(str,chunk)],capture_output=True,timeout=min(timeout*len(chunk),3600),env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
-        except (subprocess.TimeoutExpired,OSError):
+            proc=spawn_group([str(exe),'-env:UserInstallation='+(BATCH_DIR/f'profile-{number}').as_uri(),'--headless','--nologo','--nodefault','--nofirststartwizard','--norestore','--convert-to','pdf','--outdir',str(target),*map(str,chunk)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
+        except OSError:
             continue                       # the whole chunk falls back to single-file conversion
+        try:
+            proc.communicate(timeout=min(timeout*len(chunk),3600))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            with contextlib.suppress(Exception):proc.communicate(timeout=30)
+            continue
+        except BaseException:
+            kill_tree(proc)
+            raise
         for path in chunk:
             pdf=target/(path.stem+'.pdf')
             try:
