@@ -16,9 +16,13 @@ struct ContentView: View {
         }
         .frame(minWidth: 980, minHeight: 640)
         // Owned by the split view, not by the detail column: see the note in
-        // WorkspaceView. Only the tool route has an inspector, so the isPresented
-        // binding is gated on the route as well.
-        .inspector(isPresented: Binding(get: { m.route == .tool && m.showInspector },
+        // WorkspaceView. Only the tool route has an inspector, so isPresented is
+        // gated on the route. Route.tool carries the tool id, so this is a pattern
+        // match rather than an equality test.
+        .inspector(isPresented: Binding(get: {
+                                            if case .tool = m.route { return m.showInspector }
+                                            return false
+                                        },
                                         set: { m.showInspector = $0 })) {
             InspectorView().inspectorColumnWidth(min: 300, ideal: 340, max: 440)
         }

@@ -173,8 +173,18 @@ def test_an_empty_tool_page_does_not_crash(work):
     verify-narrow-window-20261023c). The CI runner's macOS does not reproduce it,
     so this is a smoke guard rather than a pixel baseline: the assertion is that
     the process was still alive and produced a snapshot at all.
+
+    What it can and cannot prove: on macOS 15 it passes whether or not the
+    inspector change is what fixes the abort, because the abort never happens
+    there. The real verdict comes from the macOS 27 request
+    verify-tool-inspector-constraint-20261023; if the CI matrix ever gains a
+    runner that reproduces the abort, this case becomes a true regression test.
     """
     out = run(work, "empty-tool", [{"tool": "pdf_images"}, {"sleep": 1},
                                    {"snapshot": "empty-tool"}])
     assert (out / "empty-tool.png").is_file(), \
         "the app produced no snapshot for an empty tool page"
+    # The runner only writes its own summary when the scenario completed, so its
+    # presence proves the app answered the last step instead of dying after the
+    # snapshot was taken.
+    assert summary(out, "empty-tool"), "the scenario produced no summary"
