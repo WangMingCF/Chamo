@@ -75,10 +75,22 @@ def strip_caches(bundle: Path) -> int:
 
 
 def pending(bundle: Path) -> bool:
-    """True when the bundle still contains prunable components."""
+    """True when the bundle still contains at least one prunable component.
+
+    A normal build prunes while this is true; a CHAMO_NO_PRUNE control build keeps
+    an untouched copy and therefore refuses one that is already pruned, i.e. it
+    refuses when this returns False. The value is existential: one leftover item
+    makes the whole copy "pending", and an empty result is not proof that the copy
+    was never touched (see the STOCK-02 note under .development/verification/).
+    """
     if any((bundle / rel).exists() for rel in PRUNE):
         return True
-    return any(bundle.glob(p) for p in PRUNE_GLOB)
+    # any() over the glob generators themselves is always true - a generator object
+    # is truthy - so this used to answer True for every copy. The symptom differed
+    # per caller: a normal build re-pruned and re-signed an already pruned bundle,
+    # and the control build's "already pruned" refusal could never fire, so
+    # CHAMO_NO_PRUNE silently accepted a pruned LibreOffice.
+    return any(match for pattern in PRUNE_GLOB for match in bundle.glob(pattern))
 
 
 def prune_and_seal(bundle: Path, run) -> int:
