@@ -267,5 +267,5 @@
 | 无 Apple Developer ID / 公证 | 首次打开被 Gatekeeper 拦截 | 维护者决定是否付费；在此之前所有文档写明 ad-hoc |
 | 无 Windows 代码签名 | SmartScreen 警告 | 同上 |
 | 真实样本 | OCR 与 Office 保真需要真实文档验收 | 只用维护者提供的小份只读样本，不入库 |
-| **`agent-review` 评审模型端点返回 503**（自 2026-10-23T06:40:15Z 起持续，第 14 小时仍在） | 所有**非受保护路径**的 PR 都无法合并：评审作业每次以「评审模型调用失败（检查 REVIEW_API_KEY / REVIEW_MODEL）」失败。实测日志原文：`review_llm: attempt 1/3 failed: HTTPError 503`。**与 diff 大小无关**——只有 2 个文件的 PR（`fddfc6e`、`885b8b7`）同样失败，旧对策「把 PR 拆小」已被证伪 | 需维护者检查 `REVIEW_MODEL` / `REVIEW_API_BASE` / `REVIEW_API_KEY`（模型是否下线、端点是否过载）。**注意别误读**：受保护路径的 PR 在 Actions 里显示 `success`，那是短路分支（同一提交的 status 同时写「改动受保护路径，需要维护者亲自审核」），**不代表评审可用** |
+| **`agent-review` 评审模型端点不可用**（自 2026-10-23T06:40:15Z 起持续） | 所有**非受保护路径**的 PR 都无法合并。实测日志原文：`review_llm: attempt 1/3 failed: HTTPError 503`。**注意不是单一错误码**：多数 run 只报 503，但 `18:14:47Z`、`18:46:39Z`、`19:26:20Z` 三次 run 的**首次尝试返回 `HTTPError 403`**，重试才落到 503。503 是服务不可用、403 属权限/鉴权类，两者并存意味着「服务过载」与「key 对 `glm-5.3-flash` 失去访问权」都不能排除。**与 diff 大小无关**——只有 2 个文件的 PR（`fddfc6e`、`885b8b7`）同样失败，旧对策「把 PR 拆小」已被证伪 | 需维护者检查 `REVIEW_MODEL` / `REVIEW_API_BASE` / `REVIEW_API_KEY`（模型是否下线、端点是否过载）。**注意别误读**：受保护路径的 PR 在 Actions 里显示 `success`，那是短路分支（同一提交的 status 同时写「改动受保护路径，需要维护者亲自审核」），**不代表评审可用** |
 | Linux CI 缺 LibreOffice Calc | `.xlsx` 转换在 Linux 上没有任何自动化验证 | 建议在 `.github/actions/setup-engine` 增加 `libreoffice-calc`（受保护路径，需维护者审核） |
