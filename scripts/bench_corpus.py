@@ -407,7 +407,9 @@ def png_set(directory: Path, count: int, size=(1600, 1200), dpi: int = 200):
     width, height = size
     for index in range(count):
         rgba = Image.new("RGBA", (width // 2, height // 2), (40, 100, 200, 150))
-        ImageDraw.Draw(rgba).rectangle([10, 10, width // 2 - 10, height // 4],
+        # Clamp: a tiny size (a test uses 32x24) would otherwise ask for a rectangle
+        # whose x1 is left of its x0, and Pillow raises instead of drawing nothing.
+        ImageDraw.Draw(rgba).rectangle([4, 4, max(5, width // 2 - 4), max(5, height // 4)],
                                        fill=(255, 0, 0, 255))
         info = PngImagePlugin.PngInfo()
         info.add_text("Description", "Synthetic RGBA sample %d" % (index + 1))

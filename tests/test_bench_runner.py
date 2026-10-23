@@ -241,7 +241,7 @@ def test_the_lossless_case_never_feeds_jpeg_to_the_lossless_operation():
 def test_the_png_corpus_is_png_only_and_keeps_the_hard_cases(tmp_path):
     import struct
 
-    written = corpus.png_set(tmp_path / "p", 3, size=(32, 24), dpi=120)
+    written = corpus.png_set(tmp_path / "p", 3, size=(64, 48), dpi=120)
     assert written, "the PNG corpus is empty"
     modes = set()
     for path in written:
