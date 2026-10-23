@@ -16,19 +16,19 @@ struct WorkspaceView: View {
         .navigationTitle(m.tool.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
-        // [Hypothesis: verify-tool-inspector-constraint-20261023b] The abort ("more
-        // Update Constraints in Window passes than there are views") and the 1281-point
-        // window both came from declaring a *minimum* inspector width: that minimum adds
-        // to the window's own 980-point minimum, and the two fight while the split view
-        // settles. ideal/max keep the column the same size in practice without forcing
-        // the window, so no minimum is declared here.
+        // The inspector belongs to the detail column. A previous candidate moved it up
+        // to the NavigationSplitView in ContentView and the panel then never rendered at
+        // all (Mac-DSH ac2/ac4 on c9c0d18: right side empty); that relocation is reverted.
         //
-        // The previous candidate moved this inspector up to the NavigationSplitView;
-        // Mac-DSH's run on c9c0d18 showed the panel then never appeared at all (ac2/ac4
-        // screenshots: right side empty), i.e. the crash "fix" removed the feature. That
-        // relocation is reverted.
+        // [Hypothesis: verify-tool-inspector-constraint-20261023b] What forces the window
+        // past a 1024-point screen is the *sum* of this column's minimum and the window's
+        // own minimum (980 + 300 = 1280), so the window's minimum is what is lowered while
+        // a tool page is open - see the note in ChamoApp.swift. This column's width is
+        // left exactly as it was: dropping the minimum here instead made the panel 15 pt
+        // wider, the table lost that space and grew a horizontal scrollbar (CI run
+        // 39908810307: pdf-images-ready changed 2.23% of pixels, allowed 0.50%).
         .inspector(isPresented: $m.showInspector) {
-            InspectorView().inspectorColumnWidth(ideal: 340, max: 440)
+            InspectorView().inspectorColumnWidth(min: 300, ideal: 340, max: 440)
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
             guard !m.running else { return false }
