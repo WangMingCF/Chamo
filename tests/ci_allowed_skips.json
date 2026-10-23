@@ -23,8 +23,8 @@
     },
     {
       "file": "tests/test_setup_engine_retry.py",
-      "reason": "the Linux step body needs bash; Windows runs the pwsh variant",
-      "why": "the step under test is shell-specific per platform; Windows uses pwsh and macOS has no GNU timeout(1), so their bounds are asserted from the action source by the other tests in this file"
+      "reason": "executes the Linux step body; other platforms assert the action source instead",
+      "why": "the behavioural tests run the Linux shell body with apt-get stubs and /usr/bin/soffice; Windows uses pwsh and macOS has no GNU timeout(1), and both of those bounds are asserted from the action source by the platform-independent tests in the same file"
     }
   ],
   "linux": [

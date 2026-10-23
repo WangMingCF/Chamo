@@ -26,9 +26,14 @@ ROOT = Path(__file__).resolve().parents[1]
 # same body cannot be exercised there: the Linux behaviour is covered on the Linux
 # job, while the Windows and macOS bounds are asserted from the action source by
 # the last two tests.
-POSIX_SHELL_ONLY = pytest.mark.skipif(
-    platform.system() == "Windows",
-    reason="the Linux step body needs bash; Windows runs the pwsh variant")
+# The behavioural tests execute the LINUX step body under bash: they stub apt-get,
+# sudo and sleep, and they assert on /usr/bin/soffice. That body is Linux-specific,
+# so they run on the Linux job only. Windows runs the pwsh variant, and macOS runs a
+# bash variant with no GNU timeout(1); both bounds are asserted from the action
+# source by the source-level tests, which are platform independent.
+LINUX_ONLY = pytest.mark.skipif(
+    platform.system() != "Linux",
+    reason="executes the Linux step body; other platforms assert the action source instead")
 ACTION = ROOT / ".github" / "actions" / "setup-engine" / "action.yml"
 
 
@@ -102,21 +107,21 @@ HANG_THEN_SUCCEED = (HEADER + RECORD + 'count=$(wc -l < "$LOG")\n'
 ALWAYS_FAIL = HEADER + RECORD + "exit 100\n"
 
 
-@POSIX_SHELL_ONLY
+@LINUX_ONLY
 def test_a_healthy_mirror_installs_on_the_first_attempt(tmp_path):
     result = run_step(tmp_path, SUCCESS)
     assert result.returncode == 0, result.stderr
     assert attempts(tmp_path) == 2, attempts(tmp_path)
 
 
-@POSIX_SHELL_ONLY
+@LINUX_ONLY
 def test_a_quick_failure_is_retried_and_then_succeeds(tmp_path):
     result = run_step(tmp_path, FAIL_THEN_SUCCEED)
     assert result.returncode == 0, result.stderr
     assert attempts(tmp_path) >= 4, attempts(tmp_path)
 
 
-@POSIX_SHELL_ONLY
+@LINUX_ONLY
 def test_a_hanging_attempt_is_bounded_and_then_retried(tmp_path):
     """The shape that broke the ui job: the command never returns."""
     result = run_step(tmp_path, HANG_THEN_SUCCEED)
@@ -124,7 +129,7 @@ def test_a_hanging_attempt_is_bounded_and_then_retried(tmp_path):
     assert attempts(tmp_path) >= 4, attempts(tmp_path)
 
 
-@POSIX_SHELL_ONLY
+@LINUX_ONLY
 def test_three_failures_still_fail_the_step(tmp_path):
     """Retrying must not hide a real breakage."""
     result = run_step(tmp_path, ALWAYS_FAIL, installs_soffice=False)
@@ -158,7 +163,7 @@ def test_the_macos_attempt_does_not_require_gnu_timeout():
     assert "bounded_brew" in macos, "the macOS bound must be done in the shell"
 
 
-@POSIX_SHELL_ONLY
+@LINUX_ONLY
 def test_the_macos_bound_terminates_a_hung_child():
     """The shell bound must kill an overrunning child and report it as a failure."""
     source = ACTION.read_text(encoding="utf-8")
@@ -166,7 +171,12 @@ def test_the_macos_bound_terminates_a_hung_child():
     start = macos.index("bounded_brew()")
     end = macos.index("for attempt in 1 2 3")
     function = macos[start:end]
-    script = "\n".join(line[8:] if line.startswith(" " * 8) else line
+    # Dedent by the block's own indent rather than a guessed 8 spaces: the YAML
+    # body sits at 10, and leaving two spaces behind broke "local" out of the
+    # function, which failed on macOS just as it would anywhere else.
+    body = [line for line in function.splitlines() if line.strip()]
+    indent = min(len(line) - len(line.lstrip()) for line in body[1:])
+    script = "\n".join(line[indent:] if line.startswith(" " * indent) else line
                         for line in function.splitlines())
     modified = script.replace("brew install --cask libreoffice", "sleep 600")
     modified = modified.replace('"$BREW_TIMEOUT"', "2").replace("sleep 5", "sleep 0.2")
