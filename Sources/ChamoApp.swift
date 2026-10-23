@@ -15,6 +15,13 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 980, minHeight: 640)
+        // Owned by the split view, not by the detail column: see the note in
+        // WorkspaceView. Only the tool route has an inspector, so the isPresented
+        // binding is gated on the route as well.
+        .inspector(isPresented: Binding(get: { m.route == .tool && m.showInspector },
+                                        set: { m.showInspector = $0 })) {
+            InspectorView().inspectorColumnWidth(min: 300, ideal: 340, max: 440)
+        }
         .sheet(isPresented: $m.showFeedback) { FeedbackView(model: m) }
         .sheet(isPresented: $m.showPalette) { CommandPalette() }
         .sheet(isPresented: $m.showShortcuts) { ShortcutsSheet() }
