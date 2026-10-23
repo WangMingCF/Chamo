@@ -174,6 +174,13 @@ def _ssim_single(a, b, width, height, window: int) -> float:
 
 def ssim(left, right, sample: int = 64, window: int = 7) -> float:
     """Structural similarity of two images, averaged over their colour planes."""
+    # A grey picture and its RGB twin are the same picture: a lossy pass may well
+    # turn a grey PNG into a 3-channel JPEG. Compare in colour when either side has
+    # colour, so the plane counts always match. Returning 0.0 on a plane-count
+    # mismatch scored a near-lossless grey result as "SSIM 0.0000" while its PSNR
+    # was 72-92 dB - a contradiction, and a false FAIL for every grey input.
+    if (left.mode in ("RGB", "RGBA")) != (right.mode in ("RGB", "RGBA")):
+        left, right = left.convert("RGB"), right.convert("RGB")
     left_planes, right_planes = _planes(left), _planes(right)
     if len(left_planes) != len(right_planes):
         return 0.0
@@ -617,14 +624,51 @@ def compressed_growth(source_pdf, out_dir):
     return round(outputs[0].stat().st_size / float(source_bytes or 1), 4)
 
 
-def check_rag(sources, out_dir) -> list:
+def check_rag(sources, out_dir, pairs=None) -> list:
     """The strict RAG export is the source itself; hashes must agree.
 
     "The source itself" cuts both ways: a file in the export that the source does
     not have is a change of what the user gets, so it is reported too.
+
+    Pass the run's own (source, output) pairs when they are available. The strict
+    export deliberately keeps the source's whole name, extension included, and
+    appends the part number: deck.pptx becomes deck.pptx_part000001.pptx. Pairing
+    by file name therefore called a byte-identical export "not in the strict
+    export" plus "1 file(s) the source does not have", and the rag.strict
+    benchmark case could never pass on any platform. The hash is what "the same
+    file" means; the naming promise is checked by its own test.
     """
     issues = []
     files = deliverables(out_dir)
+    if pairs is not None:
+        recorded = []
+        for source, output in pairs:
+            # Both sides come from the run's report, so compare resolved paths: a
+            # relative path in one report must not read as "a different file".
+            source, output = Path(source), Path(output)
+            if not output.is_file():
+                issues.append("%s: the recorded output %s does not exist"
+                              % (source.name, output))
+                continue
+            recorded.append(output)
+            try:
+                same = sha256_file(output) == sha256_file(source)
+            except OSError as error:
+                issues.append("%s: cannot hash (%s)" % (source.name, error))
+                continue
+            if not same:
+                issues.append("%s: exported bytes differ from the source" % source.name)
+        paired = {Path(source).resolve() for source, _ in pairs}
+        for source in sources:
+            if Path(source).resolve() not in paired:
+                issues.append("%s: the run recorded no export for it" % Path(source).name)
+        exported = {path.resolve() for path in recorded}
+        extra = sorted(str(path.relative_to(Path(out_dir).resolve())) for path in files
+                       if path.resolve() not in exported)
+        if extra:
+            issues.append("%d file(s) in the export that the run did not record: %s"
+                          % (len(extra), extra[:8]))
+        return issues
     by_name = {}
     for path in files:
         if path.name in by_name:

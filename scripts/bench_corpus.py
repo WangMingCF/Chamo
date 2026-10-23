@@ -391,6 +391,39 @@ def docx_document(path: Path, paragraphs: int) -> Path:
 # --------------------------------------------------------------------------
 # Images
 # --------------------------------------------------------------------------
+def png_set(directory: Path, count: int, size=(1600, 1200), dpi: int = 200):
+    """A PNG-only batch for the lossless-compression case.
+
+    The engine refuses JPEG input in lossless mode by design ("无损优化仅支持
+    PNG，不自动有损压缩"). A case that fed it the mixed image directory therefore
+    could never pass: the refusal was correct and the case was wrong. This
+    directory holds only what the operation promises to handle, and keeps the
+    RGBA + metadata and grayscale images that make a "lossless" claim meaningful.
+    """
+    from PIL import Image, ImageDraw, PngImagePlugin
+
+    directory.mkdir(parents=True, exist_ok=True)
+    written = []
+    width, height = size
+    for index in range(count):
+        rgba = Image.new("RGBA", (width // 2, height // 2), (40, 100, 200, 150))
+        ImageDraw.Draw(rgba).rectangle([10, 10, width // 2 - 10, height // 4],
+                                       fill=(255, 0, 0, 255))
+        info = PngImagePlugin.PngInfo()
+        info.add_text("Description", "Synthetic RGBA sample %d" % (index + 1))
+        png = directory / ("alpha-%02d.png" % (index + 1))
+        # compress_level=0: see the note in image_set; the bytes must not depend on
+        # which zlib the wheel was built against.
+        rgba.save(png, pnginfo=info, compress_level=0, dpi=(dpi, dpi))
+        written.append(png)
+        gray = Image.new("L", (width // 2, height // 2), 128 + index)
+        ImageDraw.Draw(gray).rectangle([0, 0, width // 4, height // 4], fill=20 + index)
+        gray_path = directory / ("gray-%02d.png" % (index + 1))
+        gray.save(gray_path, compress_level=0, dpi=(dpi, dpi))
+        written.append(gray_path)
+    return written
+
+
 def image_set(directory: Path, count: int, size=(1600, 1200), dpi: int = 200):
     """A mixed image batch: opaque JPEG, RGBA PNG with metadata, grayscale PNG.
 
@@ -469,6 +502,8 @@ def build(dest, suite: str = "representative") -> dict:
     ]
     files += image_set(dest / "images", spec["images"], size=tuple(spec["image_size"]),
                        dpi=spec["image_dpi"])
+    files += png_set(dest / "images-png", spec["images"], size=tuple(spec["image_size"]),
+                     dpi=spec["image_dpi"])
     entries = [{"path": _relative(path, dest), "bytes": path.stat().st_size,
                 "sha256": sha256_file(path)} for path in sorted(files)]
     manifest = {"schema": MANIFEST_SCHEMA, "suite": suite,

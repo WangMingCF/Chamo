@@ -95,8 +95,13 @@ def cases_for(suite: str) -> list:
     cases += [
         {"name": "image-convert.batch", "operation": "image_convert", "inputs": "images",
          "config": {"format": "png"}},
+        # The lossless case must not feed the engine JPEG: lossless compression
+        # refuses JPEG by design ("无损优化仅支持 PNG"), so a mixed batch made this
+        # case fail on its own corpus for a reason that is not a defect. PNG-only
+        # keeps the RGBA + metadata and grayscale images that make "lossless" mean
+        # something; the mixed directory still covers the lossy case below.
         {"name": "image-compress.lossless", "operation": "image_compress",
-         "inputs": "images", "config": {"format": "png", "lossy": False}},
+         "inputs": "images-png", "config": {"format": "png", "lossy": False}},
     ]
     if full:
         # Whether a run may lose detail is decided by its config alone; a second
@@ -381,7 +386,11 @@ def quality_issues(case: dict, corpus: Path, out_dir: Path, report: dict) -> lis
     if operation == "pdf_compress":
         return quality.check_pdf_compress(corpus / case["input"], out_dir)
     if operation == "rag":
-        return quality.check_rag([corpus / case["input"]], out_dir)
+        # Pair by what the run recorded: the strict export keeps the source's whole
+        # name and appends the part number, so matching on file name alone marked a
+        # byte-identical export as missing (rag.strict could never pass).
+        return quality.check_rag([corpus / case["input"]], out_dir,
+                                 pairs=recorded_pairs(report))
     if operation in ("office_pdf", "office_images"):
         return check_office_pdf(corpus / case["input"], out_dir, report)
     return ["no quality check for operation %r - the timing would be unverified" % operation]

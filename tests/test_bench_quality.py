@@ -408,3 +408,70 @@ def test_the_same_name_twice_in_the_export_is_reported(tmp_path):
     source.write_bytes(b"one")
     issues = quality.check_rag([source], out)
     assert any("more than once" in issue for issue in issues), issues
+
+def test_the_strict_export_is_paired_by_the_run_not_by_file_name(tmp_path):
+    """deck.pptx exports as deck.pptx_part000001.pptx; the bytes are what count.
+
+    Pairing on the file name made a byte-identical strict export read as "not in
+    the strict export" plus "1 file(s) the source does not have", so the rag.strict
+    benchmark case failed on every platform for a naming rule that is intended.
+    """
+    source = tmp_path / "deck.pptx"
+    source.write_bytes(b"pptx bytes")
+    out = tmp_path / "out"
+    (out / "files").mkdir(parents=True)
+    exported = out / "files" / "deck.pptx_part000001.pptx"
+    exported.write_bytes(b"pptx bytes")
+
+    pairs = [(source, exported)]
+    assert quality.check_rag([source], out, pairs=pairs) == []
+
+    exported.write_bytes(b"other bytes")                 # changed bytes
+    issues = quality.check_rag([source], out, pairs=pairs)
+    assert any("differ" in issue for issue in issues), issues
+
+    exported.write_bytes(b"pptx bytes")
+    (out / "files" / "stray.txt").write_bytes(b"not recorded")
+    issues = quality.check_rag([source], out, pairs=pairs)
+    assert any("did not record" in issue for issue in issues), issues
+
+
+def test_a_rag_source_the_run_never_exported_is_reported(tmp_path):
+    source = tmp_path / "deck.pptx"
+    source.write_bytes(b"pptx bytes")
+    other = tmp_path / "memo.docx"
+    other.write_bytes(b"docx bytes")
+    out = tmp_path / "out"
+    out.mkdir()
+    exported = out / "memo.docx_part000001.docx"
+    exported.write_bytes(b"docx bytes")
+    issues = quality.check_rag([source, other], out, pairs=[(other, exported)])
+    assert any("deck.pptx" in issue and "no export" in issue for issue in issues), issues
+
+
+def test_ssim_scores_a_grey_image_and_its_rgb_twin_as_the_same_picture():
+    """A lossy pass may turn a grey PNG into a 3-channel JPEG; that is not a change.
+
+    The plane-count mismatch used to return 0.0, so every grey input reported
+    "SSIM 0.0000" next to a PSNR of 72-92 dB - a false FAIL for the whole
+    image-compress.jpeg case.
+    """
+    from PIL import Image
+
+    flat = Image.new("L", (40, 32), 128)
+    shaped = Image.new("L", (40, 32), 128)
+    shaped.paste(20, (0, 0, 10, 8))
+    for image in (flat, shaped):
+        assert quality.ssim(image, image.convert("RGB")) >= 0.99
+        assert quality.ssim(image.convert("RGB"), image) >= 0.99
+
+
+def test_ssim_still_separates_different_pictures():
+    """The colour comparison must not be loosened to make grey inputs pass."""
+    from PIL import Image
+
+    red = Image.new("RGB", (40, 32), (255, 0, 0))
+    blue = Image.new("RGB", (40, 32), (0, 0, 255))
+    assert quality.ssim(red, blue) < quality.LOSSY_SSIM_MIN
+    grey = Image.new("L", (40, 32), 90)
+    assert quality.ssim(grey, red) < quality.LOSSY_SSIM_MIN

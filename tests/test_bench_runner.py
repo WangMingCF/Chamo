@@ -226,3 +226,30 @@ def test_the_child_environment_redirects_state_into_the_run(tmp_path):
     env = bench.child_environment(state_dir=tmp_path)
     assert env["CHAMO_STATE_DIR"] == str(tmp_path), env.get("CHAMO_STATE_DIR")
     assert env["CHAMO_PAGE_CACHE"] == "0"
+
+def test_the_lossless_case_never_feeds_jpeg_to_the_lossless_operation():
+    """Lossless compression refuses JPEG by design, so its corpus must not hold any.
+
+    The mixed images directory has 3 JPEGs; using it made image-compress.lossless
+    fail on the project's own corpus, for a refusal that is correct behaviour.
+    """
+    inputs = {case["name"]: case.get("inputs") for case in bench.CASES["smoke"]}
+    assert inputs["image-compress.lossless"] == "images-png", inputs
+    assert inputs["image-convert.batch"] == "images", inputs
+
+
+def test_the_png_corpus_is_png_only_and_keeps_the_hard_cases(tmp_path):
+    import struct
+
+    written = corpus.png_set(tmp_path / "p", 3, size=(32, 24), dpi=120)
+    assert written, "the PNG corpus is empty"
+    modes = set()
+    for path in written:
+        assert path.suffix == ".png", path
+        data = path.read_bytes()
+        assert data[:8] == b"\x89PNG\r\n\x1a\n", path
+        # IHDR's colour type sits at byte 25: 6 = RGBA, 0 = greyscale.
+        modes.add(data[25])
+    assert modes == {0, 6}, "both the RGBA/metadata and the greyscale cases must exist"
+    assert any(b"Description" in path.read_bytes() for path in written), \
+        "the RGBA case must carry its PNG text chunk"
