@@ -17,8 +17,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE = ROOT / "ops" / "agent-loop" / "review_llm.py"
+MODULE = Path(__file__).with_name("review_llm.py")
 KEY = "sk-test-do-not-leak-0123456789"
 MODEL = "glm-5.3-flash"
 
