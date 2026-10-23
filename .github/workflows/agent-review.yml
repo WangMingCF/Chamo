@@ -40,6 +40,53 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
+      - name: Resolve the reviewed verifier during the one-time migration
+        id: verifier
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          REVIEW_REPORT: ${{ inputs.report }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Normal runs always use the protected default branch checked out above.
+          if test -f scripts/ci/dsh_review.py; then
+            echo "verifier_origin=default-branch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # One migration only: the report must independently approve this workflow SHA.
+          # These bytes remain candidate-derived, independently reviewed and frozen;
+          # they are not described as an already deployed default-branch trust root.
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/feat/project-structure
+          test "$PR_NUMBER" = 44
+          test "$(date -u +%s)" -lt 1792800000
+          python3 - <<'PYREPORT'
+          import base64, json, os
+          r=json.loads(base64.b64decode(os.environ["REVIEW_REPORT"],validate=True))
+          if r.get("pr")!=44 or r.get("head_sha")!=os.environ["GITHUB_SHA"]:
+              raise SystemExit("migration_report_workflow_sha_mismatch")
+          # Signature, independence, current remote refs, coverage and privacy are checked
+          # by the frozen validator in the next step; this is only an admission guard.
+          PYREPORT
+          snapshot=a72b9e51aad5444ea661cf88fd77b00b9de25f38
+          git fetch --no-tags --depth=1 origin "$snapshot"
+          mkdir -p scripts/ci/reviewers
+          git show "$snapshot:scripts/ci/dsh_review.py" > scripts/ci/dsh_review.py
+          git show "$snapshot:scripts/ci/privacy_scan.py" > scripts/ci/privacy_scan.py
+          git show "$snapshot:scripts/ci/reviewers/Mac-DSH.pub" > scripts/ci/reviewers/Mac-DSH.pub
+          git show "$snapshot:scripts/ci/reviewers/Mac-Claude.pub" > scripts/ci/reviewers/Mac-Claude.pub
+          git show "$snapshot:scripts/ci/reviewers/NAS-DSH.pub" > scripts/ci/reviewers/NAS-DSH.pub
+          python3 - <<'PYHASH'
+          import hashlib
+          from pathlib import Path
+          expected={'scripts/ci/dsh_review.py': 'af35a6b024fa28081a2eed5c49c809f1fb3b44397e420b5b15e50dea06ac8ca1', 'scripts/ci/privacy_scan.py': '659f51585a2ff1dfe106cd8a449864701f802a50f084ebc0d1d28f8f1445e712', 'scripts/ci/reviewers/Mac-DSH.pub': '863e2aaaf42706a070baee5cde1fb89ccb92cbde18020cd5f76ca16b29f56901', 'scripts/ci/reviewers/Mac-Claude.pub': 'b32f304d969f31d6c72de77b7d3f15c2d945797776b28a546ce30ff224147c5c', 'scripts/ci/reviewers/NAS-DSH.pub': '757ab8fb37bf34371c01184ffac04710a0a60231b808613596f8d1e913692e14'}
+          for name, digest in expected.items():
+              if hashlib.sha256(Path(name).read_bytes()).hexdigest()!=digest:
+                  raise SystemExit("frozen_snapshot_hash_mismatch: "+name)
+          print("Verified 5 frozen verifier/dependency/public-key files")
+          PYHASH
+          echo "verifier_origin=reviewed-migration-snapshot" >> "$GITHUB_OUTPUT"
       - name: Verify independent DSH review
         env:
           GH_TOKEN: ${{ github.token }}

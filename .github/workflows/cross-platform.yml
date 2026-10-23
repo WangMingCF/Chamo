@@ -380,6 +380,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Use the Ubuntu archive for UI dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        # Two runs exhausted this job's 40-minute limit downloading from the
+        # Azure mirror, before any UI tests started. Keep suites, components,
+        # signing keys and packages intact; only change that runner mirror.
+        run: |
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for path in (Path('/etc/apt/sources.list'), Path('/etc/apt/sources.list.d/ubuntu.sources')):
+              if path.is_file():
+                  original = path.read_text()
+                  updated = re.sub(r'https?://azure\.archive\.ubuntu\.com/ubuntu(?=/|\s|$)',
+                                   'https://archive.ubuntu.com/ubuntu', original)
+                  if updated != original:
+                      path.write_text(updated)
+          PY
+
       - uses: ./.github/actions/setup-engine
 
       - name: Install the browser test tools

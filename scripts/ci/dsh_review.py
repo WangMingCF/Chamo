@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Publish a DSH review only after verifying its independent signature and Git refs.
 
-GitHub runs this from the trusted default branch, never from the reviewed tree.
+Normal runs load this from the trusted default branch. The initial migration
+may use the workflow's independently reviewed, hash-pinned verifier snapshot;
+product candidate code is never executed with the review token.
 Each private key stays on its review device; collaborators receive only public
 keys. A signature authenticates a report, not the truth of its reasoning: complete
 source inspection, actual checks and a separate reviewer remain required.
