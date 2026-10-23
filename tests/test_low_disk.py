@@ -9,6 +9,7 @@ still theirs to end.
 """
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -43,3 +44,19 @@ def test_the_guard_actually_uses_both_branches():
     assert "low_disk_action" in guard, "the guard must use the shared decision"
     assert "action=='resume'" in guard.replace(" ", ""), "the guard must resume"
     assert "self.low=False" in guard.replace(" ", ""), "resuming must clear the flag"
+
+def test_a_user_pause_is_no_longer_the_guards_to_lift(tmp_path, monkeypatch):
+    """The interaction the pure helper cannot show on its own.
+
+    If the guard paused first (low=True) and the user then asked for a pause too, the
+    old code left low=True, so the guard resumed the job as soon as space came back -
+    overriding a pause the user had asked for. Asking to pause clears the flag.
+    """
+    supervisor = workbench.Supervisor({"output": str(tmp_path)})
+    supervisor.paused = True
+    supervisor.low = True
+    monkeypatch.setattr(workbench.sys, "stdin", io.StringIO('{"command": "pause"}\n'))
+    supervisor.control()
+    assert supervisor.paused is True, "the user's pause must stay"
+    assert supervisor.low is False, "the guard must no longer think the pause is its own"
+    assert workbench.low_disk_action(workbench.LOW_DISK_BYTES, supervisor.low) == "none"

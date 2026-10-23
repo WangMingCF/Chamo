@@ -2014,9 +2014,12 @@ class Supervisor:
             with self.lock:
                 if cmd=='resume' and shutil.disk_usage(self.req['output']).free<LOW_DISK_BYTES:
                     event('control',state='paused',detail='空间仍不足 2GB，请腾出空间后继续');continue
-                if cmd=='pause':self.paused=True
+                # A user pause must clear low: otherwise the guard still believes the
+                # pause is its own low-disk one and, as soon as space frees up, resumes
+                # the job behind the user's back.
+                if cmd=='pause':self.paused=True;self.low=False
                 elif cmd=='resume':self.paused=False;self.low=False
-                elif cmd=='cancel':self.cancelled=True;self.paused=False
+                elif cmd=='cancel':self.cancelled=True;self.paused=False;self.low=False
                 action={'pause':platform_process.pause_tree,
                         'resume':platform_process.resume_tree,
                         'cancel':platform_process.terminate_tree}.get(cmd)
