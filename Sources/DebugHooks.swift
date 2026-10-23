@@ -210,9 +210,15 @@ import Quartz
             // next step cannot race the resize.
             let target = NSSize(width: width, height: height)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                if window.contentLayoutRect.size != target {
-                    window.setContentSize(target)
-                }
+                // Compare in the coordinate system setContentSize writes to:
+                // contentLayoutRect subtracts a toolbar/full-size content view, so
+                // comparing against it would never be equal and the skip below would
+                // be dead code. The tolerance keeps floating point noise from
+                // forcing a redundant resize on every step.
+                let current = window.contentView?.frame.size ?? .zero
+                let unchanged = abs(current.width - target.width) < 0.5
+                    && abs(current.height - target.height) < 0.5
+                if !unchanged { window.setContentSize(target) }
             }
             next(1.0); return
         }
