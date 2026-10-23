@@ -23,51 +23,41 @@ ENGINE = Path(__file__).resolve().parents[1] / "engine"
 sys.path.insert(0, str(ENGINE))
 import platform_process as pp
 
-# The counter writes atomically (temp + rename). A plain open(path, "w")
-# truncates first, so a reader racing with a write observes an empty file and
-# reads 0 — that made the pause assertion flaky for a reason unrelated to
-# process control.
-# Windows denies os.replace while the reader holds the target open, so a failed
-# replace must not kill the worker: that would stop the counter for the wrong
-# reason and make the pause assertion pass vacuously.
+# The counter appends one number per line and never truncates or renames.
+# Earlier versions used temp-file + os.replace, described here as "atomic". It
+# was not, from the reader's side: a read racing the truncate saw an empty file
+# (0), and on Windows a pause landing inside os.replace left the target missing
+# until resume. Both showed up as "counter unreadable or reset before pause" and
+# were artefacts of the file protocol, not of process control. Appending removes
+# the window instead of papering over it with a retry: the last complete line is
+# always readable, before, during and after a pause.
 COUNTER = """
-import os, sys, time
+import sys, time
 path = sys.argv[1]
 value = 0
 while True:
     value += 1
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w") as handle:
-            handle.write(str(value))
-        os.replace(tmp, path)
-    except OSError:
-        time.sleep(0.005)
+    with open(path, "a") as handle:
+        handle.write(str(value) + chr(10))
     time.sleep(0.02)
 """
 
 
 def read(path: Path) -> int:
-    """Last value reported by the worker, or 0 before it has reported once."""
+    """Last value reported by the worker, or 0 before it has reported once.
+
+    The worker appends one number per line and never truncates or renames the
+    file. A truncate+rename scheme looked atomic but was not, for two reasons:
+    a reader racing the truncate saw an empty file (value 0), and pausing the
+    process inside os.replace left the target missing until resume - the pause
+    test then read 0 and failed with "counter unreadable or reset before pause",
+    which is a property of the file protocol, not of process control.
+    """
     try:
-        return int(path.read_text().strip() or 0)
+        numbers = path.read_text().split()
+        return int(numbers[-1]) if numbers else 0
     except (OSError, ValueError):
         return 0
-
-
-def read_settled(path: Path, timeout: float = 2.0) -> int:
-    """A non-zero reading, waiting out the window where a rename is in flight.
-
-    On Windows the target can be briefly unreadable during os.replace, which shows
-    up as 0. Treating that as "the counter reset" is a read artefact, not a
-    process-control failure, so wait for a stable non-zero value instead.
-    """
-    deadline = time.time() + timeout
-    value = read(path)
-    while value == 0 and time.time() < deadline:
-        time.sleep(0.02)
-        value = read(path)
-    return value
 
 
 def test_pause_stops_progress_and_resume_continues(tmp_path):
@@ -83,7 +73,7 @@ def test_pause_stops_progress_and_resume_continues(tmp_path):
 
         pp.pause_tree(proc)
         time.sleep(0.15)          # let an in-flight write land
-        frozen = read_settled(counter)
+        frozen = read(counter)
         assert frozen >= 3, f"counter unreadable or reset before pause ({frozen})"
         time.sleep(0.5)
         after = read(counter)
