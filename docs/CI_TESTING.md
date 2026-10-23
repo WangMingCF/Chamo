@@ -108,6 +108,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 - 合并门禁里 pytest 用 `-x`：遇到第一个失败就停，修完再推。`test-matrix` 不用 `-x`，以便比较多次运行的结果。
 - 依赖版本以 `third_party/requirements.lock` 为准；升级依赖单独成 PR，并附三端结果。
 - 单个作业的运行时间增加超过 3 分钟，要在 PR 中说明理由。
+- **`all checks` 变红时，先看是哪个作业红了，再看它停在哪一步。** 已实测过一次假红：`ui (ubuntu-latest)` 有 `timeout-minutes: 40`，而它的第 1 步 `setup-engine` 要用 apt 装 LibreOffice（慢时 30〜60 分钟），于是作业在 47 分钟时被 **cancelled**，浏览器测试一步都没跑，另外 9 个作业全绿，`all checks` 只报 `not successful: {'ui': 'cancelled'}`。这种情况与 PR 内容无关：确认被取消的是 `setup-engine` 这一步，重跑该作业即可；不要为此去改本来正确的代码。
 
 ## 10. 维护者在 Mac 上复现
 
