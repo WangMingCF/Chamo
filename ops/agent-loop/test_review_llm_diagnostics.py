@@ -167,3 +167,26 @@ def test_the_retry_budget_bounds_the_wait_and_says_so(client, monkeypatch, capsy
     assert client.main() == 1
     err = capsys.readouterr().err
     assert "retry budget" in err, "an exhausted budget must be reported"
+
+def test_a_refused_key_fails_fast_instead_of_burning_the_retry_budget(client, monkeypatch, capsys):
+    # Observed 2026-10-23: some runs got 403 on the first attempt while others got
+    # 503. A refused credential will not be accepted a minute later, so the long
+    # budget must not be spent discovering that once per pull request.
+    body = json.dumps({"error": {"message": "invalid api key", "type": "auth_error"}})
+    assert run(client, monkeypatch, http_error(body, code=403)) == 1
+    err = capsys.readouterr().err
+    attempts = err.count("failed:")
+    assert attempts == client.AUTH_ATTEMPTS, (
+        "a 403 must stop after AUTH_ATTEMPTS attempts, not after ATTEMPTS: " + err)
+    assert "refused credential" in err, "the log must say why it stopped early"
+    assert KEY not in err, "the API key must never be logged"
+
+
+def test_an_overload_still_uses_the_whole_retry_budget(client, monkeypatch, capsys):
+    # The early exit is only for refused credentials; an outage keeps retrying.
+    body = json.dumps({"error": {"message": "overloaded", "type": "server_error"}})
+    assert run(client, monkeypatch, http_error(body, code=503)) == 1
+    err = capsys.readouterr().err
+    assert err.count("failed:") == client.ATTEMPTS, (
+        "a 503 must still use every attempt: " + err)
+    assert "refused credential" not in err
