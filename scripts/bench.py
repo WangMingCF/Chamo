@@ -217,18 +217,49 @@ def recorded_pairs(report: dict) -> list:
     return pairs
 
 
-def child_environment() -> dict:
+def child_environment(state_dir=None) -> dict:
     """The environment every measured child gets, so the report can be honest.
 
     Command cases run in the same environment as engine cases; recording
     CHAMO_PAGE_CACHE=0 for the whole report while letting command cases inherit
     the caller's value would make the metadata describe something that did not
     happen.
+
+    state_dir redirects the engine receipts/records. Without it a run writes into
+    the user's real application state: pointing HOME at an empty directory and
+    running the smoke suite added 44 files there, which contradicts "the corpus
+    and outputs live in a temporary directory" and leaves junk on a developer's
+    machine. Every measured run gets its own state folder inside the work
+    directory, and the report records the variable.
     """
     environment = dict(os.environ)
     environment["CHAMO_PAGE_CACHE"] = "0"      # see the module docstring
     environment["PYTHONIOENCODING"] = "utf-8"
+    if state_dir is not None:
+        environment["CHAMO_STATE_DIR"] = str(state_dir)
     return environment
+
+
+def unaccounted_sources(report: dict) -> list:
+    """Sources the engine recorded as anything other than a successful conversion.
+
+    The engine exits 0 when individual files fail: the per-file state is in
+    report.json and the protocol-level exit code stays 0. Judging a case only by
+    the exit code therefore let a run that silently skipped a broken file look
+    faster - and its timing was adopted. That is the "did less work, so it was
+    quicker" number this script exists to prevent.
+    """
+    problems = []
+    for result in (report or {}).get("results") or []:
+        state = str(result.get("state") or "")
+        if state in ("complete", "resumed"):
+            continue
+        sources = [str(item) for item in result.get("sources") or []]
+        detail = str(result.get("error") or "").strip()[:200]
+        problems.append("%s: %s%s" % (", ".join(sources) or "<no source>",
+                                      state or "no state",
+                                      (" (" + detail + ")") if detail else ""))
+    return problems
 
 
 def _kill_tree(process) -> None:
@@ -299,8 +330,10 @@ def run_engine(inputs, out_dir: Path, operation: str, config: dict, timeout: int
                           **config}}
     request_path = out_dir.parent / "request.json"
     request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+    # State lives under this run's own folder: see child_environment().
     result = _run([sys.executable, "-I", "-B", str(ENGINE), "--request", str(request_path)],
-                  timeout=timeout, env=child_environment())
+                  timeout=timeout,
+                  env=child_environment(state_dir=out_dir.parent / "state"))
     if result["timed_out"]:
         return {"seconds": timeout, "timed_out": True, "rc": None, "stderr": "",
                 "output_bytes": 0, "outputs": 0}
@@ -433,6 +466,11 @@ def run_case(case: dict, corpus: Path, work: Path, reps: int, timeout: int,
             issues.append("run %d exited with %s: %s"
                           % (rep + 1, measured["rc"], (measured["stderr"] or "")[-400:]))
         else:
+            # Per-file failures come back with rc=0, so the exit code alone would
+            # mark a run that skipped a broken input as a clean, fast run.
+            skipped = unaccounted_sources(report)
+            if skipped:
+                issues.extend("run %d: %s" % (rep + 1, issue) for issue in skipped)
             found = quality_issues(case, corpus, out_dir, report)
             if found:
                 issues.extend("run %d: %s" % (rep + 1, issue) for issue in found)
@@ -539,7 +577,9 @@ def main(argv=None) -> int:
               # Derived from the same function the children get, so the report
               # cannot claim a setting the child did not receive.
               "environment": {key: value for key, value in child_environment().items()
-                              if key in ("CHAMO_PAGE_CACHE", "PYTHONIOENCODING")},
+                              if key in ("CHAMO_PAGE_CACHE", "PYTHONIOENCODING",
+                                         "CHAMO_STATE_DIR")},
+              "state_dir": "per-run folder inside the work directory",
               "corpus": {"suite": manifest["suite"], "total_bytes": manifest["total_bytes"],
                          "manifest_sha256": sha256_text(json.dumps(manifest["files"],
                                                                    sort_keys=True))},

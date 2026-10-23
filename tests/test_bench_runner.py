@@ -183,3 +183,46 @@ def test_a_timed_out_run_really_ends_instead_of_hanging():
     # waiting for the grandchild to finish (the test itself would otherwise only
     # be bounded by the outer pytest timeout).
     assert elapsed < 15, "the timeout path took %.1fs" % elapsed
+
+
+def test_a_run_that_skipped_a_broken_file_is_not_a_pass():
+    """The engine exits 0 with a per-file failure; the case must still fail.
+
+    Reproduced by Mac-Claude on the smoke corpus: corrupt one of eight images,
+    the engine returns rc=0 with seven recorded outputs and state 'failed' for
+    the broken one, and run_case used to report PASS with the timing adopted.
+    """
+    report = {
+        "results": [
+            {"state": "complete", "sources": ["ok-1.png"],
+             "outputs": [{"path": "o1.png"}]},
+            {"state": "failed", "sources": ["broken.png"],
+             "outputs": [], "error": "图片无法解码"},
+        ]
+    }
+    problems = bench.unaccounted_sources(report)
+    assert len(problems) == 1, problems
+    assert "broken.png" in problems[0], problems[0]
+    assert "failed" in problems[0], problems[0]
+
+
+def test_a_cancelled_source_is_also_unaccounted():
+    report = {"results": [
+        {"state": "cancelled", "sources": ["a.png"],
+         "outputs": [], "error": "任务已取消"},
+    ]}
+    assert bench.unaccounted_sources(report), "cancelled must not count as done"
+
+
+def test_every_source_completing_is_clean():
+    report = {"results": [
+        {"state": "complete", "sources": ["a.png"], "outputs": [{"path": "a"}]},
+        {"state": "resumed", "sources": ["b.png"], "outputs": [{"path": "b"}]},
+    ]}
+    assert bench.unaccounted_sources(report) == []
+
+
+def test_the_child_environment_redirects_state_into_the_run(tmp_path):
+    env = bench.child_environment(state_dir=tmp_path)
+    assert env["CHAMO_STATE_DIR"] == str(tmp_path), env.get("CHAMO_STATE_DIR")
+    assert env["CHAMO_PAGE_CACHE"] == "0"
