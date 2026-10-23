@@ -90,15 +90,17 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 - **真实文档的保真度**：只用维护者提供的小份只读样本，结果写进计划，样本不入库。
 - **签名、公证、Gatekeeper、干净系统安装**：没有证据就不写"已通过"。
 
-## 8. 已知问题（2026-10-22 核实）
+## 8. 历史间歇失败（2026-10-23 复核：下表三条均已修复）
 
-现有测试里有两个在 main 上间歇失败，与本方案无关，但会让门禁偶尔变红。修复前不得用重试或跳过掩盖：
+这三条曾让门禁偶发变红（原写作「两个」，实为三条）。**它们现在都已在 main 上修复**，保留记录有两个用处：让后来者知道这些已被处理过、不要重复「修复」；以及**明确「如果今天门禁变红，原因不是它们」**——不要把新的红灯归因为「已知抖动」而放过。修复从来不是靠重试或跳过。
 
 | 测试 | 平台 | 现象 | 原因与处理 |
 | --- | --- | --- | --- |
 | `tests/test_page_resume.py::test_cancelled_then_resumed_outputs_match_a_clean_run` | macOS | 取消后输出目录里残留 `.Chamo暂存/<任务>/…_page00041.jpeg`，违反"取消后输出目录保持原样"的约定 | 引擎竞态：线程池在 `submit()` 里按需启动线程，取消异常落在启动等待里时，新线程不在池的线程集合中，`shutdown(wait=True)` 不等它，它在暂存目录被删时写入一页。引擎改为所有页面编码经过一道“门”，`render()` 退出前关门并等正在写的页完成；新增确定性回归测试 `tests/test_cancel_encode_race.py`。PR #2；macos-latest 重复 20/20 通过 |
 | `tests/test_shard_equivalence.py::test_content_text_is_not_sharded_and_not_slower` | Windows、macOS | `content.text.timing` 断言失败 | 计时噪声，不是变慢：文本 PDF 上 auto 只多“导入 pageclass + 内容判定”，实测约 20 ms CPU。Windows：墙钟在同样工作下 5.0–13.3 s，改测 CPU 时间（引擎挂起启动、放进专用 Job Object 再恢复，作业记账累计整棵进程树，包括工作进程所在的嵌套作业；`test_tree_cpu_clock_counts_a_worker_in_its_own_group` 在三端验证）。两种时钟都改为每臂取最小值，超预算时补测到最多 14 对，预算 5% 不变。macOS（#10）：同样的工作 CPU 秒数可高可低（误差是双向的，疑与 M1 runner 的性能核/能效核调度有关），3 台 runner 每台 12 对，每臂最小值之比仍在 0.89–1.11，固定单个编码线程也一样（变异系数 8.5–11%）；42 组交替实测 auto/off 中位数 0.97–1.00，没有真实变慢。维护者决定：① 三端都新增 `content.text.sample_cost`：在新进程里测内容判定的 CPU，占 off 运行 CPU 的比例 ≤ 5%（实测约 0.25%）；② Linux、Windows 的端到端 auto/off 比值继续作为门禁；③ macOS 的端到端比值照常测量，以 REPORT 状态打印，不作判定（`verify_shard.TEXT_END_TO_END_JUDGED`）。Windows 上 Job Object 无法建立时退回墙钟，此时 sample_cost 也用墙钟比较，两边口径一致。`content.text.sample_cost` 另有绝对上限 0.25 s（实测约 0.02 s）。**残余风险（已接受）：** macOS 上若引擎在内容判定之外引入了真实的端到端变慢，门禁不会自动拦下，只会在 REPORT 中看到；Linux、Windows 上的端到端门禁仍会拦下这类回归，而引擎代码三端相同。不跳过、不重试。PR #7；三端重复结果见 PR |
 | `tests/test_cli.py::test_ctrl_c_does_not_wait_for_queued_page_encodes` | macOS | 偶发 `the run never encoded a page; the fixture or the hook is broken` | 测试的时序依赖：启动后固定等 1 s 就发 Ctrl-C，慢 runner 上启动加第一页 300 dpi 渲染超过 1 s，中断到达时还没有任何编码开始，前置条件不成立。改为等编码记录里真的出现第一页再中断（最多等 60 s，超时即失败），不跳过、不重试。`scripts/ci_remote_test.sh --platforms core --repeat 10` 结果见对应 PR |
+
+**2026-10-23 复核依据**（在 `main` = `ce3ca61` 上逐条查过，不是据 PR 描述推断）：`tests/test_cancel_encode_race.py` 存在；`scripts/verify_shard.py` 里 `TEXT_END_TO_END_JUDGED` 出现 7 次，`sample_cost` 同时出现在 `scripts/verify_shard.py` 与 `tests/test_shard_equivalence.py`；`tests/test_cli.py` 里保留 `never encoded a page` 这条守卫（等编码记录里出现第一页再中断）。
 
 ## 9. 纪律
 
