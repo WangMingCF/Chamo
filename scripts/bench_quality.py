@@ -172,8 +172,54 @@ def _ssim_single(a, b, width, height, window: int) -> float:
     return total / count if count else 0.0
 
 
+def _has_alpha(image) -> bool:
+    """Whether this image carries transparency that a JPEG output cannot keep.
+
+    A palette PNG stores transparency in a "transparency" info key rather than in
+    its mode, so the mode alone would miss it.
+    """
+    return image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info
+
+
+def flatten_for_comparison(left, right):
+    """Put a transparent source and an opaque output on the same footing.
+
+    JPEG cannot hold alpha, so the engine flattens a transparent source onto white
+    before encoding (engine/workbench.py: Image.new('RGB', size, 'white') pasted
+    through the alpha mask). Comparing that output against the source's raw colour
+    channels - alpha simply dropped - measures the background colour rather than
+    the compression: a (40,100,200,alpha 150) region scored SSIM 0.8861 while the
+    same source composited on white scores 0.9996. A false FAIL.
+
+    Only a side that has alpha facing a side that has none is flattened, so
+    alpha-to-alpha comparisons are untouched. This helper's shape comes from the
+    reviewer's independent counter-example (Mac-Claude, PR #47 B4).
+    """
+    from PIL import Image
+
+    def flat(image):
+        rgba = image.convert("RGBA")
+        base = Image.new("RGB", rgba.size, (255, 255, 255))
+        base.paste(rgba, mask=rgba.getchannel("A"))
+        return base
+
+    if _has_alpha(left) and not _has_alpha(right):
+        return flat(left), right
+    if _has_alpha(right) and not _has_alpha(left):
+        return left, flat(right)
+    return left, right
+
+
 def ssim(left, right, sample: int = 64, window: int = 7) -> float:
     """Structural similarity of two images, averaged over their colour planes."""
+    # A grey picture and its RGB twin are the same picture: a lossy pass may well
+    # turn a grey PNG into a 3-channel JPEG. Compare in colour when either side has
+    # colour, so the plane counts always match. Returning 0.0 on a plane-count
+    # mismatch scored a near-lossless grey result as "SSIM 0.0000" while its PSNR
+    # was 72-92 dB - a contradiction, and a false FAIL for every grey input.
+    left, right = flatten_for_comparison(left, right)
+    if (left.mode in ("RGB", "RGBA")) != (right.mode in ("RGB", "RGBA")):
+        left, right = left.convert("RGB"), right.convert("RGB")
     left_planes, right_planes = _planes(left), _planes(right)
     if len(left_planes) != len(right_planes):
         return 0.0
@@ -617,14 +663,51 @@ def compressed_growth(source_pdf, out_dir):
     return round(outputs[0].stat().st_size / float(source_bytes or 1), 4)
 
 
-def check_rag(sources, out_dir) -> list:
+def check_rag(sources, out_dir, pairs=None) -> list:
     """The strict RAG export is the source itself; hashes must agree.
 
     "The source itself" cuts both ways: a file in the export that the source does
     not have is a change of what the user gets, so it is reported too.
+
+    Pass the run's own (source, output) pairs when they are available. The strict
+    export deliberately keeps the source's whole name, extension included, and
+    appends the part number: deck.pptx becomes deck.pptx_part000001.pptx. Pairing
+    by file name therefore called a byte-identical export "not in the strict
+    export" plus "1 file(s) the source does not have", and the rag.strict
+    benchmark case could never pass on any platform. The hash is what "the same
+    file" means; the naming promise is checked by its own test.
     """
     issues = []
     files = deliverables(out_dir)
+    if pairs is not None:
+        recorded = []
+        for source, output in pairs:
+            # Both sides come from the run's report, so compare resolved paths: a
+            # relative path in one report must not read as "a different file".
+            source, output = Path(source), Path(output)
+            if not output.is_file():
+                issues.append("%s: the recorded output %s does not exist"
+                              % (source.name, output))
+                continue
+            recorded.append(output)
+            try:
+                same = sha256_file(output) == sha256_file(source)
+            except OSError as error:
+                issues.append("%s: cannot hash (%s)" % (source.name, error))
+                continue
+            if not same:
+                issues.append("%s: exported bytes differ from the source" % source.name)
+        paired = {Path(source).resolve() for source, _ in pairs}
+        for source in sources:
+            if Path(source).resolve() not in paired:
+                issues.append("%s: the run recorded no export for it" % Path(source).name)
+        exported = {path.resolve() for path in recorded}
+        extra = sorted(str(path.relative_to(Path(out_dir).resolve())) for path in files
+                       if path.resolve() not in exported)
+        if extra:
+            issues.append("%d file(s) in the export that the run did not record: %s"
+                          % (len(extra), extra[:8]))
+        return issues
     by_name = {}
     for path in files:
         if path.name in by_name:

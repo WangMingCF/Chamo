@@ -408,3 +408,120 @@ def test_the_same_name_twice_in_the_export_is_reported(tmp_path):
     source.write_bytes(b"one")
     issues = quality.check_rag([source], out)
     assert any("more than once" in issue for issue in issues), issues
+
+def test_the_strict_export_is_paired_by_the_run_not_by_file_name(tmp_path):
+    """deck.pptx exports as deck.pptx_part000001.pptx; the bytes are what count.
+
+    Pairing on the file name made a byte-identical strict export read as "not in
+    the strict export" plus "1 file(s) the source does not have", so the rag.strict
+    benchmark case failed on every platform for a naming rule that is intended.
+    """
+    source = tmp_path / "deck.pptx"
+    source.write_bytes(b"pptx bytes")
+    out = tmp_path / "out"
+    (out / "files").mkdir(parents=True)
+    exported = out / "files" / "deck.pptx_part000001.pptx"
+    exported.write_bytes(b"pptx bytes")
+
+    pairs = [(source, exported)]
+    assert quality.check_rag([source], out, pairs=pairs) == []
+
+    exported.write_bytes(b"other bytes")                 # changed bytes
+    issues = quality.check_rag([source], out, pairs=pairs)
+    assert any("differ" in issue for issue in issues), issues
+
+    exported.write_bytes(b"pptx bytes")
+    (out / "files" / "stray.txt").write_bytes(b"not recorded")
+    issues = quality.check_rag([source], out, pairs=pairs)
+    assert any("did not record" in issue for issue in issues), issues
+
+
+def test_a_rag_source_the_run_never_exported_is_reported(tmp_path):
+    source = tmp_path / "deck.pptx"
+    source.write_bytes(b"pptx bytes")
+    other = tmp_path / "memo.docx"
+    other.write_bytes(b"docx bytes")
+    out = tmp_path / "out"
+    out.mkdir()
+    exported = out / "memo.docx_part000001.docx"
+    exported.write_bytes(b"docx bytes")
+    issues = quality.check_rag([source, other], out, pairs=[(other, exported)])
+    assert any("deck.pptx" in issue and "no export" in issue for issue in issues), issues
+
+
+def test_ssim_scores_a_grey_image_and_its_rgb_twin_as_the_same_picture():
+    """A lossy pass may turn a grey PNG into a 3-channel JPEG; that is not a change.
+
+    The plane-count mismatch used to return 0.0, so every grey input reported
+    "SSIM 0.0000" next to a PSNR of 72-92 dB - a false FAIL for the whole
+    image-compress.jpeg case.
+    """
+    from PIL import Image
+
+    flat = Image.new("L", (40, 32), 128)
+    shaped = Image.new("L", (40, 32), 128)
+    shaped.paste(20, (0, 0, 10, 8))
+    for image in (flat, shaped):
+        assert quality.ssim(image, image.convert("RGB")) >= 0.99
+        assert quality.ssim(image.convert("RGB"), image) >= 0.99
+
+
+def test_ssim_still_separates_different_pictures():
+    """The colour comparison must not be loosened to make grey inputs pass."""
+    from PIL import Image
+
+    red = Image.new("RGB", (40, 32), (255, 0, 0))
+    blue = Image.new("RGB", (40, 32), (0, 0, 255))
+    assert quality.ssim(red, blue) < quality.LOSSY_SSIM_MIN
+    grey = Image.new("L", (40, 32), 90)
+    assert quality.ssim(grey, red) < quality.LOSSY_SSIM_MIN
+
+def test_a_transparent_source_is_compared_after_flattening_onto_white():
+    """A JPEG output has no alpha; the source must be composited the same way.
+
+    The engine flattens a transparent PNG onto white before encoding, so comparing
+    the output against the source's raw colour channels measures the background
+    colour instead of the compression. A semi-transparent region scored 0.8861
+    against an output whose real similarity to the flattened source is 0.9996 -
+    a false FAIL (Mac-Claude's counter-example on PR #47).
+    """
+    from PIL import Image
+
+    source = Image.new("RGBA", (64, 48), (40, 100, 200, 150))
+    flat = Image.new("RGB", source.size, (255, 255, 255))
+    flat.paste(source, mask=source.getchannel("A"))
+
+    assert quality.ssim(source, flat) >= 0.99, quality.ssim(source, flat)
+
+    # Flattened onto the wrong background it must still be rejected, or the check
+    # would accept any composited result.
+    dark = Image.new("RGB", source.size, (0, 0, 0))
+    dark.paste(source, mask=source.getchannel("A"))
+    assert quality.ssim(source, dark) < quality.LOSSY_SSIM_MIN, quality.ssim(source, dark)
+
+
+def test_two_images_that_both_carry_alpha_are_not_flattened():
+    """Alpha-to-alpha comparison must stay plane for plane."""
+    from PIL import Image
+
+    left = Image.new("RGBA", (32, 24), (10, 20, 30, 200))
+    right = Image.new("RGBA", (32, 24), (10, 20, 30, 200))
+    assert quality.ssim(left, right) >= 0.99
+
+    # A different picture must not be rescued by flattening.
+    other = Image.new("RGBA", (32, 24), (200, 20, 30, 200))
+    assert quality.ssim(left, other) < quality.LOSSY_SSIM_MIN
+
+
+def test_a_palette_png_with_a_transparency_key_counts_as_transparent():
+    """Mode "P" hides transparency in an info key, not in the mode."""
+    from PIL import Image
+
+    palette = Image.new("P", (32, 24))
+    palette.putpalette([255, 0, 0] + [0, 0, 0] * 255)
+    palette.info["transparency"] = 0
+    assert quality._has_alpha(palette) is True
+
+    plain = Image.new("P", (32, 24))
+    plain.putpalette([255, 0, 0] + [0, 0, 0] * 255)
+    assert quality._has_alpha(plain) is False
