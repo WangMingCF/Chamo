@@ -1953,6 +1953,25 @@ class RunCancelled(RuntimeError):
     """
 
 
+# Below this the guard pauses the job instead of letting writes fail halfway.
+LOW_DISK_BYTES = 2_000_000_000
+
+
+def low_disk_action(free, low):
+    """What the disk guard should do now: pause, resume, or nothing.
+
+    The guard only pauses; a job that ran low on space and got it back has to be
+    let go again, or it waits for a resume nobody sends. The browser UI never sends
+    one - it only has cancel - so the message "腾出空间后继续" was a promise the GUI
+    could not keep. Resuming here also covers the CLI, which has no control channel
+    at all. Only the guard's own pause (`low`) is lifted: a pause the user asked
+    for stays until they ask for it to end.
+    """
+    if free < LOW_DISK_BYTES:
+        return "pause"
+    return "resume" if low else "none"
+
+
 def cancellation_cause(error):
     """The RunCancelled hiding in an exception chain, if there is one.
 
@@ -1993,7 +2012,7 @@ class Supervisor:
             try:cmd=json.loads(line).get('command')
             except:continue
             with self.lock:
-                if cmd=='resume' and shutil.disk_usage(self.req['output']).free<2_000_000_000:
+                if cmd=='resume' and shutil.disk_usage(self.req['output']).free<LOW_DISK_BYTES:
                     event('control',state='paused',detail='空间仍不足 2GB，请腾出空间后继续');continue
                 if cmd=='pause':self.paused=True
                 elif cmd=='resume':self.paused=False;self.low=False
@@ -2013,13 +2032,21 @@ class Supervisor:
             time.sleep(1)
             try:free=shutil.disk_usage(out).free
             except OSError:free=0
-            if free<2_000_000_000:
+            action=low_disk_action(free,self.low)
+            if action=='pause':
                 with self.lock:
                     if not self.paused:
                         self.paused=True;self.low=True
                         for p in self.children.values():
                             platform_process.pause_tree(p)
-                        event('control',state='paused',detail='磁盘可用空间不足 2GB，已暂停；腾出空间后继续')
+                        event('control',state='paused',detail='磁盘可用空间不足 2GB，已暂停；腾出空间后自动继续')
+            elif action=='resume':
+                with self.lock:
+                    if self.low:
+                        self.low=False;self.paused=False
+                        for p in self.children.values():
+                            platform_process.resume_tree(p)
+                        event('control',state='running',detail='磁盘空间已恢复，继续')
     def execute(self,unit,record):
         """Runs one unit — a single file, or a chunk of small images — in one worker process."""
         while self.paused and not self.cancelled:time.sleep(.2)
@@ -2155,7 +2182,7 @@ class Supervisor:
         # creates it, the other must adopt it instead of failing on the mkdir race.
         try:out.mkdir(parents=True,exist_ok=True)
         except FileExistsError:raise ValueError('输出路径已存在且不是文件夹')
-        if shutil.disk_usage(out).free<2_000_000_000:raise ValueError('输出盘不足 2GB，请先腾出空间')
+        if shutil.disk_usage(out).free<LOW_DISK_BYTES:raise ValueError('输出盘不足 2GB，请先腾出空间')
         # Reclaim staging folders from runs that died without cleaning up; see
         # sweep_staging for why only clearly stale folders are touched.
         swept=sweep_staging(platform_state.staging(out))
