@@ -2232,7 +2232,18 @@ class Supervisor:
             try:
                 _cleanup_run_staging(out,record)
                 platform_state.drop_staging(out)
-            except OSError:
+            except Exception:                          # noqa: BLE001 - cleanup must not fail a run
+                # Both calls are idempotent, which is what makes the retry in the
+                # finally safe: _cleanup_run_staging walks this run's own register
+                # files (each removal is rmtree(ignore_errors=True) + unlink(
+                # missing_ok=True)), and drop_staging is rmdir inside except OSError.
+                # The bound is Exception rather than OSError because a non-OSError
+                # here would be the very failure this PR removes: a finished run
+                # reported as an error.
+                # Residual risk (documented, not papered over): if a Windows straggler
+                # still holds a handle inside the staging folder, this call cannot
+                # delete it and the folder stays behind an already-shown finished line;
+                # the finally retries after that line has been displayed.
                 pass
             event('finished',**{k:v for k,v in summary.items() if k!='results'},
                   **({'manifest':str(manifest)} if manifest else {}))
