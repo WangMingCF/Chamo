@@ -55,9 +55,9 @@ runs:
                      -o "Acquire::https::Timeout=$APT_STALL"
                      -o "Acquire::Retries=$APT_RETRIES")
         # A per-attempt cap alone is not a bound on the step: three attempts of
-        # 1800 s plus backoff is ~90 minutes, and the engine and package jobs
-        # carry no timeout-minutes (GitHub's default is 360), so a slow mirror
-        # could hold a runner for well over an hour. A deadline makes the total
+        # APT_TIMEOUT plus backoff add up, and the engine and package jobs carry
+        # no timeout-minutes (GitHub's default is 360), so a slow mirror could
+        # hold a runner for well over an hour. A deadline makes the total
         # explicit; each attempt gets whatever is left of it.
         deadline=$(( $(date -u +%s) + APT_BUDGET ))
         remaining() { left=$(( deadline - $(date -u +%s) )); [ "$left" -gt 0 ] && echo "$left" || echo 0; }
