@@ -64,3 +64,20 @@ def test_real_file_can_be_created_with_a_long_name(tmp_path):
     target = tmp_path / name
     target.write_bytes(b"x")
     assert target.exists()
+
+def test_a_dot_component_is_never_kept():
+    """`Path("...pdf").stem` is "..": joining that as a folder escapes the output dir."""
+    for name in (".", ".."):
+        result = names.sanitize(name)
+        assert result not in (".", ".."), f"{name!r} must not survive as a path component"
+        assert result.strip(), "must still produce a usable name"
+
+
+def test_longer_dot_runs_are_not_treated_as_directory_references():
+    # Only "." and ".." are directory references. What happens to a longer dot run
+    # is platform-specific - Windows strips trailing dots and spaces, POSIX keeps
+    # them - so assert the invariant that matters on both: never a directory name.
+    for name in ("...", "a...", "....txt"):
+        result = names.sanitize(name)
+        assert result not in (".", ".."), name
+        assert result.strip(), name
