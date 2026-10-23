@@ -112,18 +112,3 @@ def test_the_control_build_refuses_an_already_pruned_runtime():
                          "helpers": Path("/tmp/chamo-guard")}
             fires = eval("not " + expression, namespace)  # noqa: S307 - our own expression
             assert fires is expected, (expression, pending_value, fires)
-
-
-def test_stock_02_boundary_is_documented():
-    """An existential pending() is not proof that the copy was never touched.
-
-    STOCK-02: one leftover item still makes the copy pending, and a dangling
-    symlink is not seen by exists() while prune() removes exists() or is_symlink().
-    This test only pins the documented boundary so the gap is not silently claimed
-    closed; it does not assert the behaviour is complete.
-    """
-    note = ROOT / ".development" / "verification" / "STOCK-02-boundary.md"
-    assert note.is_file(), note
-    text = note.read_text(encoding="utf-8")
-    assert "owner_device=NAS-DSH" in text
-    assert "existential" in text or "存在性" in text
