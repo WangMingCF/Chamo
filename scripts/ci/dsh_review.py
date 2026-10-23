@@ -26,6 +26,12 @@ def gh(*args):
     return subprocess.check_output(['gh', *args], text=True)
 
 
+def render_report(report):
+    """The exact public body; local preparation scans this before any upload."""
+    return (report['reviewer_device'] + ' 完整代码审查（已验证签名）\n\n```json\n'
+            + json.dumps(report, ensure_ascii=False, indent=2) + '\n```\n')
+
+
 def validate(raw: bytes, signature: str, pr: dict, files: list[str], key=None):
     if len(raw) > 24000:
         raise ValueError('review report too large')
@@ -107,8 +113,7 @@ def main():
                 return  # A PR event requests review; it is never an approval.
             raw = base64.b64decode(encoded, validate=True)
             report = validate(raw, os.environ.get('REVIEW_SIGNATURE', ''), pr, files)
-            body = (report['reviewer_device'] + ' 完整代码审查（已验证签名）\n\n```json\n'
-                    + json.dumps(report, ensure_ascii=False, indent=2) + '\n```\n')
+            body = render_report(report)
             # Scan the exact public rendering, including decoded JSON escapes.
             scan(body)
         latest = current()
