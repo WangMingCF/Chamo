@@ -88,9 +88,33 @@ runs:
       run: |
         # Each attempt is bounded: the real failure here was a cask download that
         # sat for 37 minutes, which a retry loop alone cannot escape.
+        #
+        # macOS has no GNU timeout(1) - only gtimeout from coreutils, which this
+        # runner does not install - so the bound is done in the shell: run the
+        # install in the background, poll until the deadline, and kill the whole
+        # process group if it overruns. Using "timeout" here failed the macOS job
+        # outright with command-not-found.
         BREW_TIMEOUT=900
+        bounded_brew() {
+          brew install --cask libreoffice &
+          local child=$!
+          local waited=0
+          while kill -0 "$child" 2>/dev/null; do
+            if [ "$waited" -ge "$BREW_TIMEOUT" ]; then
+              echo "brew exceeded ${BREW_TIMEOUT}s; terminating"
+              kill -TERM "$child" 2>/dev/null || true
+              sleep 5
+              kill -KILL "$child" 2>/dev/null || true
+              wait "$child" 2>/dev/null || true
+              return 124
+            fi
+            sleep 5
+            waited=$((waited + 5))
+          done
+          wait "$child"
+        }
         for attempt in 1 2 3; do
-          if timeout "$BREW_TIMEOUT" brew install --cask libreoffice; then break; fi
+          if bounded_brew; then break; fi
           echo "::warning::brew attempt $attempt failed or timed out after ${BREW_TIMEOUT}s; retrying in $((attempt * 20))s"
           sleep $((attempt * 20))
         done

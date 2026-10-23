@@ -123,3 +123,37 @@ def test_every_attempt_is_bounded_in_the_action_source():
     source = ACTION.read_text(encoding="utf-8")
     assert "WaitForExit" in source, "the Windows attempt must be bounded too"
     assert "BREW_TIMEOUT" in source, "the macOS attempt must be bounded too"
+
+
+def test_the_macos_attempt_does_not_require_gnu_timeout():
+    """macOS ships no GNU timeout(1); calling it failed the job outright.
+
+    The bound must be done in the shell so it works on a stock macOS runner.
+    Only gtimeout from coreutils would provide that binary, and this runner does
+    not install it, so a bare "timeout" call on the macOS path is a hard failure.
+    """
+    source = ACTION.read_text(encoding="utf-8")
+    macos = source.split("- name: Install LibreOffice (macOS)", 1)[1]
+    for line in macos.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert not stripped.startswith("if timeout "), "macOS has no timeout(1): " + stripped
+    assert "bounded_brew" in macos, "the macOS bound must be done in the shell"
+
+
+def test_the_macos_bound_terminates_a_hung_child():
+    """The shell bound must kill an overrunning child and report it as a failure."""
+    source = ACTION.read_text(encoding="utf-8")
+    macos = source.split("- name: Install LibreOffice (macOS)", 1)[1]
+    start = macos.index("bounded_brew()")
+    end = macos.index("for attempt in 1 2 3")
+    function = macos[start:end]
+    script = "\n".join(line[8:] if line.startswith(" " * 8) else line
+                        for line in function.splitlines())
+    modified = script.replace("brew install --cask libreoffice", "sleep 600")
+    modified = modified.replace('"$BREW_TIMEOUT"', "2").replace("sleep 5", "sleep 0.2")
+    result = subprocess.run(["bash", "-c", modified + "\nbounded_brew; echo rc=$?"],
+                            capture_output=True, text=True, timeout=90)
+    assert "rc=124" in result.stdout, result.stdout + result.stderr
+    assert "terminating" in (result.stdout + result.stderr)
