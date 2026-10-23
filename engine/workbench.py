@@ -975,7 +975,7 @@ def convert(sources, work, cfg, shard_budget=1, shard_info=None, cache=None):
         from cloud_kb_pack.config import Limits
         lim=Limits(pdf_pages=cfg['pdf_pages'],pdf_bytes=cfg['pdf_bytes'],image_bytes=cfg.get('image_bytes',20_000_000),document_bytes=cfg.get('document_bytes',150_000_000),text_bytes=cfg.get('text_bytes',10_000_000),table_bytes=cfg.get('table_bytes',10_000_000),table_rows=cfg.get('table_rows',100000),batch_files=cfg.get('batch_files',50))
         store=work/'audit';store.mkdir();upload=work/'upload';upload.mkdir()
-        process(s,store,lim,{'policy':'strict','pdf_mode':'split','encoding':'utf-8-sig','page_window':100,'timeout':600,'header_rows':1,'csv_field_bytes':10_000_000},False,tree_relative=Path(s.name),upload_root=upload,work_root=work)
+        process(s,store,lim,rag_options(cfg),False,tree_relative=Path(s.name),upload_root=upload,work_root=work)
         for x in upload.iterdir():
             if x.is_file():shutil.move(x,work/x.name)
     elif op in ('image_convert','image_compress'):
@@ -1753,6 +1753,17 @@ def auto_workers():
     Leave two cores for the system and the UI, at most six, at least two.
     """
     return min(6,max(2,(os.cpu_count() or 4)-2))
+
+def rag_options(cfg):
+    """Options for the strict RAG / PDF-split sub-process.
+
+    timeout comes from the request, like everywhere else: this path used to hardcode
+    600 s, so a caller who raised the timeout for a big document was still cut off at
+    600, and one who lowered it got no benefit here.
+    """
+    return {'policy':'strict','pdf_mode':'split','encoding':'utf-8-sig','page_window':100,
+            'timeout':cfg.get('timeout',600),'header_rows':1,'csv_field_bytes':10_000_000}
+
 
 def validate(cfg):
     if cfg.get('operation') not in OPS:raise ValueError('未知转换类型')

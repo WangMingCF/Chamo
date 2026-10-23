@@ -48,3 +48,22 @@ def test_an_absent_timeout_keeps_the_documented_default():
     cfg = config()
     workbench.validate(cfg)
     assert "timeout" not in cfg, "validate must not invent a timeout the caller did not send"
+
+def test_the_rag_sub_process_honours_the_request_timeout():
+    # This path used to hardcode 600 s, so raising the timeout for a big document
+    # had no effect at all on RAG / PDF-split.
+    assert workbench.rag_options({"timeout": 7})["timeout"] == 7
+    assert workbench.rag_options({"timeout": 1200})["timeout"] == 1200
+
+
+def test_an_absent_timeout_still_gets_the_documented_600_seconds():
+    assert workbench.rag_options({})["timeout"] == 600
+
+
+def test_the_other_rag_options_are_untouched():
+    options = workbench.rag_options({"timeout": 5})
+    assert options["policy"] == "strict"
+    assert options["pdf_mode"] == "split"
+    assert options["encoding"] == "utf-8-sig"
+    assert options["page_window"] == 100
+    assert options["header_rows"] == 1
