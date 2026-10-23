@@ -129,6 +129,10 @@ def test_the_window_at_1024_keeps_every_column_readable(work):
         {"tool": "pdf_images"}, {"output": str(work / "out")},
         {"set": {"format": "png", "dpi": 150}},
         {"add": [str(pdf)]},
+        # 1024 is the width the check is about. The requested 700 points of height
+        # are clamped to 692 by the runner's screen (menu bar + Dock), so the
+        # captured content view is 1024x692; the height has no bearing on the
+        # column check and the baseline is recorded at the clamped size.
         {"resize": {"width": 1024, "height": 700}},
         # The "已添加" toast fades out after a few seconds; a baseline that
         # contains it would differ between runs (uitests/README.md says so).

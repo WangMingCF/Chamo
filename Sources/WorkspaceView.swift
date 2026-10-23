@@ -162,18 +162,15 @@ struct FileTable: View {
         // Row numbers are looked up once per render, not per cell (large batches stay O(n)).
         let order = m.tool.ordered ? Dictionary(uniqueKeysWithValues: m.items.enumerated().map { ($1.id, $0 + 1) }) : [:]
         return Table(of: QueueItem.self, selection: $m.selection, sortOrder: $sortOrder) {
-            // The window can be as narrow as 1024 points, and at that width the
-            // old ideals (360+72+80+120+200) pushed the last columns past the edge
-            // and produced a horizontal scrollbar. The name column is the only one
-            // that can absorb slack, so it gets the flexible range and the rest
-            // keep their minimums.
-            // Measured on real 1024-point screenshots four times over. The sidebar and
-            // the inspector leave about 498 points for the table; on top of the columns
-            // the table also spends a little on its own insets, so the maxima have to
-            // stay clearly under that budget. 452 (minimums) overflowed, an unbounded
-            // name column grew into the status column, and 484 still left a horizontal
-            // scroller. 448 fits with the status text complete; the name column
-            // truncates in the middle and shows the full path in a tooltip.
+            // Sizing is measured, not guessed, and the table stops scrolling only when
+            // every column has an upper bound: at a 1024-point window the sidebar and
+            // the inspector leave about 498 points, of which the table spends a few on
+            // its own insets. CI screenshots drove four attempts - the original ideals
+            // (360+72+80+120+200) overflowed, capping the four narrow columns while the
+            // name column stayed unbounded still pushed the status column out, and a
+            // 484-point total still showed a horizontal scroller. The limits below sum
+            // to 448 (180+52+60+60+96), which fits with the status text complete; the
+            // name column truncates in the middle and carries the full path as a tooltip.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
                 .width(min: 110, ideal: 150, max: 180)
             TableColumn("页数", value: \.sortPages) { item in

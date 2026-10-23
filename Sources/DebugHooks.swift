@@ -190,11 +190,12 @@ import Quartz
                 finish(dir, ok: false, step: i, error: "resize needs width and height >= 320x240")
                 return
             }
-            // The main window, not "the first visible one": a status-bar panel is
-            // also in NSApp.windows and also visible, and resizing it would leave
-            // the test looking at the runner's default size while claiming 1024.
-            guard let window = NSApp.mainWindow ?? NSApp.keyWindow
-                    ?? NSApp.windows.first(where: { $0.contentView != nil && $0.canBecomeMain }) else {
+            // The document window, never a panel: a status-bar panel, the palette or a
+            // sheet is also in NSApp.windows and also visible, and keyWindow can be one
+            // of them. Resizing the wrong window would leave the test looking at the
+            // runner's default size while claiming 1024.
+            guard let window = NSApp.mainWindow
+                    ?? NSApp.windows.first(where: { $0.contentView != nil && $0.canBecomeMain && $0.isVisible }) else {
                 finish(dir, ok: false, step: i, error: "resize: no main window to resize")
                 return
             }
