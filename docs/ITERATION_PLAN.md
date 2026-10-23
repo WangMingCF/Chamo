@@ -51,15 +51,15 @@
 - **多端功能单测**：按 `docs/CI_TESTING.md` 补测试并确认对应 CI 作业覆盖；它列出了每个必需检查覆盖什么、新功能必须补哪些用例、哪些部分 CI 覆盖不到。
 - **CI 不等于产品测试**：CI 覆盖引擎与打包；macOS GUI 需在打包后的应用里点击验证（`-D CHAMO_DEBUG` 钩子与截图）。
 
-## 3. 当前状态（2026-10-22，已核实）
+## 3. 当前状态（2026-10-23 复核）
 
 | 项 | 状态 |
 | --- | --- |
-| 代码 | `main` = `3f03e18`；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
+| 代码 | `main` = `ce3ca61`（2026-10-23T17:56Z 复核，此前这里记的 `3f03e18` 已落后）；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
 | 竞品 | `docs/COMPETITORS.md` 已入库：15 个产品、两张矩阵、每格标证据等级；**没有任何实测**，两处官方页面抓不到已标「待复核」，Kumquat 官网 404 未列入 |
 | 基准 | `scripts/bench_corpus.py`、`scripts/bench.py`、`scripts/bench_quality.py` 与 `tests/test_bench.py` 在 **PR #18**（三端 `test-matrix` 各 9/9 通过），合并前不作为基线引用 |
 | CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、自循环工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
-| 发布 | **尚无任何 Release**。旧的本地发布脚本已删除，需要 GitHub Actions 发布流程 |
+| 发布 | **已发布 `Chamo 0.1.0`**：tag `v0.1.0`，2026-10-22T12:58:01Z，GitHub 标记 Latest。发布按 `.development/RELEASE.md` 执行；签名/公证状态见下一行，如实为 ad-hoc 与未签名 |
 | 签名 | macOS ad-hoc，未做 Developer ID 签名与公证；Windows 未签名 |
 | 能力 | PDF 转图片（分片成本模型、页级续跑）、PDF 拆分/合并/压缩、Office/WPS 转 PDF/图片、图片合成 PDF、图片转换/压缩、RAG 严格预处理；CLI `chamo`、本机浏览器界面 `chamo ui` |
 | 明确未实现 | OCR、PDF 转可编辑 Office、长图、多帧拆分、命名模板、目标体积、空间预估、Office 转换前审计、报告导出、Finder 快捷动作（直接转换）、压缩包解包、音视频 |
@@ -266,5 +266,5 @@
 | 无 Apple Developer ID / 公证 | 首次打开被 Gatekeeper 拦截 | 维护者决定是否付费；在此之前所有文档写明 ad-hoc |
 | 无 Windows 代码签名 | SmartScreen 警告 | 同上 |
 | 真实样本 | OCR 与 Office 保真需要真实文档验收 | 只用维护者提供的小份只读样本，不入库 |
-| `agent-review` 服务对大 diff 无响应 | 评审作业 15 分钟以上不出结果、或 5 分钟被对端断开，PR 无法合并 | 已在 #5 请维护者核查代理的读超时与配置；开发侧对策是把 PR 拆小 |
+| **`agent-review` 评审模型端点返回 503**（自 2026-10-23T06:40:15Z 起持续，第 14 小时仍在） | 所有**非受保护路径**的 PR 都无法合并：评审作业每次以「评审模型调用失败（检查 REVIEW_API_KEY / REVIEW_MODEL）」失败。实测日志原文：`review_llm: attempt 1/3 failed: HTTPError 503`。**与 diff 大小无关**——只有 2 个文件的 PR（`fddfc6e`、`885b8b7`）同样失败，旧对策「把 PR 拆小」已被证伪 | 需维护者检查 `REVIEW_MODEL` / `REVIEW_API_BASE` / `REVIEW_API_KEY`（模型是否下线、端点是否过载）。**注意别误读**：受保护路径的 PR 在 Actions 里显示 `success`，那是短路分支（同一提交的 status 同时写「改动受保护路径，需要维护者亲自审核」），**不代表评审可用** |
 | Linux CI 缺 LibreOffice Calc | `.xlsx` 转换在 Linux 上没有任何自动化验证 | 建议在 `.github/actions/setup-engine` 增加 `libreoffice-calc`（受保护路径，需维护者审核） |
