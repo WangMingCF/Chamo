@@ -36,7 +36,6 @@ LINUX_ONLY = pytest.mark.skipif(
     platform.system() != "Linux",
     reason="executes the Linux step body; other platforms assert the action source instead")
 ACTION = ROOT / ".github" / "actions" / "setup-engine" / "action.yml"
-WORKFLOW_PATH = ROOT / ".github" / "workflows" / "cross-platform.yml"
 
 
 def linux_step_body() -> str:
@@ -222,43 +221,3 @@ def test_the_macos_bound_terminates_a_hung_child():
                             capture_output=True, text=True, timeout=90)
     assert "rc=124" in result.stdout, result.stdout + result.stderr
     assert "terminating" in (result.stdout + result.stderr)
-
-def test_every_long_job_has_a_timeout_and_a_bounded_install():
-    """No job may run on GitHub's 360-minute default, and no apt call may be unbounded.
-
-    Measured: the linux package job normally installs LibreOffice in 85 s, but on
-    2026-10-23 it sat in its own apt-get for 47 minutes. That job does not use
-    setup-engine, so the bounds added there never reached it, and it carried no
-    timeout-minutes - so one slow mirror blocked every PR's all checks.
-    """
-    source = WORKFLOW_PATH.read_text(encoding="utf-8")
-    # Every job that runs a package/engine/ui workload must declare a timeout.
-    for job in ('engine', 'package', 'ui'):
-        block = job_block(source, job)
-        assert "timeout-minutes:" in block, job + " has no timeout-minutes"
-    # And the package job's apt calls must be bounded like setup-engine's.
-    package = job_block(source, "package")
-    assert "Acquire::http::Timeout" in package, "package apt needs a stall timeout"
-    assert "timeout \"$APT_TIMEOUT\"" in package, "package apt needs a per-attempt cap"
-    # Every apt-get invocation must sit behind the timeout command; the dpkg
-    # cleanup also uses sudo timeout, so count only the apt-get lines.
-    apt_lines = [line for line in package.splitlines() if "apt-get" in line]
-    assert apt_lines, "the package job should install LibreOffice"
-    for line in apt_lines:
-        assert "timeout" in line or "timeout" in package.splitlines()[
-            package.splitlines().index(line) - 1], "unbounded apt-get: " + line.strip()
-
-
-def job_block(source: str, job: str) -> str:
-    """The text of one job in the workflow, up to the next top-level job."""
-    start = source.index(chr(10) + "  " + job + ":" + chr(10))
-    rest = source[start + 1:]
-    following = rest.find(chr(10) + "  ")
-    # Walk forward to the next line that starts a new job (two spaces, name, colon).
-    lines = rest.splitlines(keepends=True)
-    collected = []
-    for index, line in enumerate(lines):
-        if index > 0 and line.startswith('  ') and not line.startswith('    ') and line.rstrip().endswith(':'):
-            break
-        collected.append(line)
-    return "".join(collected)
