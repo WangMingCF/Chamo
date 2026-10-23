@@ -99,8 +99,8 @@
     },
     {
       "file": "tests/test_staging_cleanup.py",
-      "reason": "symlink creation needs privileges on Windows; see ci_allowed_skips.json",
-      "why": "the same path-containment check is exercised on Linux and macOS; Windows needs SeCreateSymbolicLinkPrivilege which hosted runners do not grant"
+      "reason_prefix": "cannot create a symlink on this Windows runner",
+      "why": "the test tries to create the symlink first and only skips when Windows refuses it (SeCreateSymbolicLinkPrivilege is not granted on hosted runners); the refusal text is printed in the skip reason, so the premise is observed on every run. The same path-containment check runs on Linux and macOS"
     }
   ]
 }

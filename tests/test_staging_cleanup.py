@@ -139,18 +139,26 @@ def test_a_register_pointing_outside_the_staging_root_deletes_nothing(tmp_path):
 def test_a_symlink_inside_the_staging_root_is_not_followed(tmp_path):
     """A symlinked staging entry must not lead cleanup out of the root.
 
-    POSIX only: creating symlinks on the Windows runner needs privileges this
-    test does not have, and skipping on one platform must be registered in
-    tests/ci_allowed_skips.json with a reason (docs/CI_TESTING.md section 5).
+    The skip is observed, not assumed: the symlink is attempted first. Creating
+    one on Windows needs SeCreateSymbolicLinkPrivilege, which hosted runners do
+    not grant, so the attempt raises an OSError; that error is quoted in the skip
+    reason, and it is registered in tests/ci_allowed_skips.json with
+    reason_prefix (docs/CI_TESTING.md section 5). If a runner can create the
+    symlink after all, the real assertion runs there instead of being skipped.
+    A failure on POSIX is a real environment problem, so it propagates.
     """
-    if sys.platform == "win32":
-        pytest.skip("symlink creation needs privileges on Windows; see ci_allowed_skips.json")
     out, record, staged, root = _layout(tmp_path)
     victim = tmp_path / "victim"
     victim.mkdir()
     (victim / "precious").write_bytes(b"z")
     link = root / (FINGERPRINT + "-link")
-    link.symlink_to(victim, target_is_directory=True)
+    try:
+        link.symlink_to(victim, target_is_directory=True)
+    except OSError as error:
+        if sys.platform != "win32":
+            raise
+        pytest.skip("cannot create a symlink on this Windows runner: %s; "
+                    "see ci_allowed_skips.json" % error)
     (record / ("staging-" + FINGERPRINT + ".json")).write_text(
         json.dumps({"path": str(link), "fingerprint": FINGERPRINT}),
         encoding="utf-8")
