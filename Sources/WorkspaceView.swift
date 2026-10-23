@@ -16,9 +16,12 @@ struct WorkspaceView: View {
         .navigationTitle(m.tool.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
-        .inspector(isPresented: $m.showInspector) {
-            InspectorView().inspectorColumnWidth(min: 300, ideal: 340, max: 440)
-        }
+        // The inspector is attached one level up, to the NavigationSplitView in
+        // ContentView. Mounting it on the detail column here made macOS abort with
+        // "more Update Constraints in Window passes than there are views" the
+        // moment a tool page appeared (even with no files, no resize and no
+        // conversion), because the split view and the detail both owned the
+        // inspector's width constraints.
         .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
             guard !m.running else { return false }
             for p in providers { _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { Task { @MainActor in m.add([url]) } } } }
