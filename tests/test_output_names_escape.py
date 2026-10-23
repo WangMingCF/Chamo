@@ -28,7 +28,9 @@ def test_every_operation_keeps_its_output_inside_the_chosen_folder(tmp_path):
         for operation in OPERATIONS:
             relative = relative_for(source_name, operation)
             target = (tmp_path / relative).resolve()
-            assert str(target).startswith(str(tmp_path.resolve()) + "/"), (
+            # is_relative_to, not a string prefix: Windows joins with a backslash,
+            # so a "/"-suffixed prefix check silently fails there.
+            assert target.is_relative_to(tmp_path.resolve()), (
                 f"{source_name!r} with {operation} escaped to {relative}")
             assert ".." not in relative.parts, relative
 

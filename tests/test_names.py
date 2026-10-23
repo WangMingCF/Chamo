@@ -73,7 +73,11 @@ def test_a_dot_component_is_never_kept():
         assert result.strip(), "must still produce a usable name"
 
 
-def test_a_long_dot_name_still_round_trips():
-    # Only the two directory references are special; longer dot runs are real names.
-    assert names.sanitize("...") == "..."
-    assert names.sanitize("a...") == "a..."
+def test_longer_dot_runs_are_not_treated_as_directory_references():
+    # Only "." and ".." are directory references. What happens to a longer dot run
+    # is platform-specific - Windows strips trailing dots and spaces, POSIX keeps
+    # them - so assert the invariant that matters on both: never a directory name.
+    for name in ("...", "a...", "....txt"):
+        result = names.sanitize(name)
+        assert result not in (".", ".."), name
+        assert result.strip(), name
