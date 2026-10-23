@@ -82,3 +82,12 @@ def test_page_stem_never_splits_a_character():
     result = names.page_stem("讲" * 81)
     result.encode("utf-8").decode("utf-8")  # round-trips, so no partial character
     assert result, "must not truncate to nothing"
+
+def test_reserve_pays_for_the_suffix_out_of_the_same_budget():
+    suffix, marker = ".pdf", " (2)"
+    stem = names.reserve("讲" * 81, suffix, len(marker))
+    assert len((stem + marker + suffix).encode("utf-8")) <= names.NAME_MAX_BYTES
+
+
+def test_reserve_leaves_a_short_name_alone():
+    assert names.reserve("report", ".pdf", 4) == "report"

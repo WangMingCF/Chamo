@@ -29,3 +29,15 @@ def test_the_render_name_and_the_verifier_agree(tmp_path):
     expected = workbench._expected_page_files(LONG, [0], {"format": "jpeg"})[0]
     produced = f"{platform_names.page_stem(LONG)}_page{0 + 1:05d}.jpeg"
     assert produced == expected
+
+def test_a_collision_suffix_does_not_overflow_a_long_name(tmp_path):
+    # The retry name is built by appending " (2)", so a name already near the limit
+    # reached 257 bytes and unique_target raised OSError ENAMETOOLONG instead of
+    # producing the second file.
+    name = ("讲" * 80) + ".pdf"          # 244 bytes, legal on its own
+    (tmp_path / name).write_bytes(b"existing, different content")
+    target, adopted = workbench.unique_target(tmp_path, Path(name), "deadbeef", set())
+    assert not adopted, "different content must never be adopted"
+    assert len(target.name.encode("utf-8")) <= platform_names.NAME_MAX_BYTES, target.name
+    target.write_bytes(b"second")        # the filesystem must accept the retry name
+    assert (tmp_path / name).read_bytes() == b"existing, different content"

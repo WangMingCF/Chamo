@@ -1310,7 +1310,14 @@ def unique_target(dest, relative, expected, taken):
     folder,name=relative.parent,relative.name
     stem,suffix=Path(name).stem,Path(name).suffix
     for n in range(1,10000):
-        candidate=dest/folder/(name if n==1 else f'{stem} ({n}){suffix}')
+        if n==1:
+            candidate=dest/folder/name
+        else:
+            # The collision marker is appended, so the stem must give it room: a
+            # name already at 255 bytes turned a " (2)" retry into OSError
+            # ENAMETOOLONG instead of a second file.
+            marker=f' ({n})'
+            candidate=dest/folder/(platform_names.reserve(stem,suffix,len(marker))+marker+suffix)
         if candidate in taken:continue
         if not candidate.exists() and not candidate.is_symlink():return candidate,False
         if candidate.is_file() and not candidate.is_symlink() and sha(candidate)==expected:return candidate,True

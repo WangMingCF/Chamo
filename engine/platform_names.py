@@ -57,8 +57,23 @@ def truncate(name: str, max_bytes: int = NAME_MAX_BYTES) -> str:
     return "".join(out) + ext
 
 
-# The longest suffix the per-page render appends: "_page00001.jpeg".
-_PAGE_SUFFIX_BYTES = len(b"_page00001.jpeg")
+def reserve(stem: str, suffix: str, extra: int = 0) -> str:
+    """Shorten a stem so that `stem + suffix` (plus `extra` bytes) is one component.
+
+    Whatever the app appends - a page counter, a " (2)" collision marker - has to
+    be paid for out of the same 255 bytes the name already occupies.
+    """
+    room = NAME_MAX_BYTES - len(suffix.encode("utf-8")) - extra
+    if len(stem.encode("utf-8")) <= room:
+        return stem
+    kept, used = [], 0
+    for ch in stem:
+        size = len(ch.encode("utf-8"))
+        if used + size > room:
+            break
+        kept.append(ch)
+        used += size
+    return "".join(kept) or "_"
 
 
 def page_stem(stem: str) -> str:
@@ -71,17 +86,7 @@ def page_stem(stem: str) -> str:
     boundary, and keep every caller using this one function so the names the
     renderer writes and the names the verifier expects cannot drift apart.
     """
-    limit = NAME_MAX_BYTES - _PAGE_SUFFIX_BYTES
-    if len(stem.encode("utf-8")) <= limit:
-        return stem
-    kept, used = [], 0
-    for ch in stem:
-        size = len(ch.encode("utf-8"))
-        if used + size > limit:
-            break
-        kept.append(ch)
-        used += size
-    return "".join(kept) or "_"
+    return reserve(stem, "_page00001.jpeg")
 
 
 def path_fits(relative) -> bool:
