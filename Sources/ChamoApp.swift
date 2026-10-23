@@ -14,7 +14,12 @@ struct ContentView: View {
             case .tool: WorkspaceView()
             }
         }
-        .frame(minWidth: 980, minHeight: 640)
+        // An inspector attached to the split view adds its own 300-point minimum
+        // to the window's, so keeping 980 while it was open demanded 1280 and the
+        // window grew past a 1024-point screen (observed as 1281x744 screenshots
+        // against a 1024x692 baseline). The two minimums trade off so the total
+        // stays 980 whether or not the inspector is showing.
+        .frame(minWidth: m.route == .tool && m.showInspector ? 680 : 980, minHeight: 640)
         // Owned by the split view, not by the detail column: see the note in
         // WorkspaceView. Only the tool route has an inspector, so isPresented is
         // gated on the route. Route.tool carries the tool id, so this is a pattern

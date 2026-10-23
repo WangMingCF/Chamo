@@ -181,10 +181,12 @@ def test_an_empty_tool_page_does_not_crash(work):
     runner that reproduces the abort, this case becomes a true regression test.
     """
     out = run(work, "empty-tool", [{"tool": "pdf_images"}, {"sleep": 1},
-                                   {"snapshot": "empty-tool"}])
+                                   {"snapshot": "empty-tool"},
+                                   # The summary step is what writes empty-tool.json. Asking
+                                   # for it is also the liveness proof: the harness only
+                                   # writes the file after answering the last step, so a
+                                   # process that died after the snapshot leaves no summary.
+                                   {"summary": "empty-tool"}])
     assert (out / "empty-tool.png").is_file(), \
         "the app produced no snapshot for an empty tool page"
-    # The runner only writes its own summary when the scenario completed, so its
-    # presence proves the app answered the last step instead of dying after the
-    # snapshot was taken.
     assert summary(out, "empty-tool"), "the scenario produced no summary"
