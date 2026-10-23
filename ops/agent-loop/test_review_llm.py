@@ -41,6 +41,16 @@ def serve(plan):
                 self.end_headers()
                 self.wfile.write(json.dumps({"choices": [{"message": {"content": "好\nVERDICT: APPROVE"}}]}).encode())
                 return
+            if isinstance(action, tuple) and action[0] == "error":
+                # An error status with a body: the only thing that distinguishes an
+                # overloaded endpoint from a retired model from a bad key.
+                body = action[2].encode()
+                self.send_response(action[1])
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if action == "sse":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -83,7 +93,7 @@ def test_a_dropped_connection_is_retried():
     p = run(env_for(srv))
     srv.shutdown()
     assert p.returncode == 0 and "VERDICT: APPROVE" in p.stdout, p.stderr
-    assert seen["requests"] == 2 and "attempt 1/3 failed" in p.stderr
+    assert seen["requests"] == 2 and "attempt 1/6 failed" in p.stderr
 
 
 def test_a_proxy_that_ignores_streaming_still_works():
@@ -91,6 +101,18 @@ def test_a_proxy_that_ignores_streaming_still_works():
     p = run(env_for(srv))
     srv.shutdown()
     assert p.returncode == 0 and p.stdout.strip().endswith("VERDICT: APPROVE"), p.stderr
+
+
+def test_an_error_body_and_the_model_reach_the_log():
+    """A bare "HTTPError 503" sent an operator to check the key; say what broke."""
+    body = json.dumps({"error": {"message": "model is overloaded", "type": "server_error"}})
+    srv, _ = serve([("error", 503, body)])
+    p = run(env_for(srv))
+    srv.shutdown()
+    assert p.returncode == 1
+    assert "HTTPError 503" in p.stderr and "model=m-test" in p.stderr
+    assert "overloaded" in p.stderr, p.stderr
+    assert "k-test" not in p.stderr
 
 
 def test_missing_model_fails_without_calling():
@@ -101,5 +123,5 @@ def test_persistent_errors_fail_and_never_print_the_key():
     srv, seen = serve([500])
     p = run(env_for(srv, key="k-secret"))
     srv.shutdown()
-    assert p.returncode == 1 and seen["requests"] == 3
+    assert p.returncode == 1 and seen["requests"] == 6
     assert "k-secret" not in p.stdout + p.stderr
