@@ -2255,6 +2255,29 @@ class Supervisor:
             # either: it lists only the tasks that started, so 成功+异常 would not add
             # up to 任务数 and the file would describe a run that never finished.
             manifest=write_manifest(out,self.results,cfg['operation']) if len(self.results)>1 and not cancelled_now else None
+            # Remove this run's staging folders *before* announcing the end. The
+            # finished event is what the window and the browser page show as the
+            # final line, and a cancelled run on Windows was still showing an
+            # output folder containing ".Chamo暂存" when that line appeared - the
+            # staging removal lived only in the finally below and therefore ran
+            # after the status was already visible. A failure here must not turn a
+            # finished run into an error: the finally retries it.
+            try:
+                _cleanup_run_staging(out,record)
+                platform_state.drop_staging(out)
+            except Exception:                          # noqa: BLE001 - cleanup must not fail a run
+                # Both calls are idempotent, which is what makes the retry in the
+                # finally safe: _cleanup_run_staging walks this run's own register
+                # files (each removal is rmtree(ignore_errors=True) + unlink(
+                # missing_ok=True)), and drop_staging is rmdir inside except OSError.
+                # The bound is Exception rather than OSError because a non-OSError
+                # here would be the very failure this PR removes: a finished run
+                # reported as an error.
+                # Residual risk (documented, not papered over): if a Windows straggler
+                # still holds a handle inside the staging folder, this call cannot
+                # delete it and the folder stays behind an already-shown finished line;
+                # the finally retries after that line has been displayed.
+                pass
             event('finished',**{k:v for k,v in summary.items() if k!='results'},
                   **({'manifest':str(manifest)} if manifest else {}))
             self.cancelled=True
