@@ -19,6 +19,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -59,6 +60,21 @@ def read_stream(response) -> str:
     return "".join(parts)
 
 
+def _redact(text: str) -> str:
+    """Strip anything that looks like a credential the server echoed back.
+
+    The error body is printed to the job log. A gateway that quotes the offending
+    request can quote the Authorization header with it, and this project's rule is
+    that the key never reaches a log - whatever the far end decides to say.
+    """
+    key = os.environ.get("REVIEW_API_KEY", "")
+    if key:
+        text = text.replace(key, "[redacted]")
+    text = re.sub(r"(?i)\bbearer\s+\S+", "Bearer [redacted]", text)
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]{6,}", "[redacted]", text)
+    return text
+
+
 def describe(error, model: str) -> str:
     """One line naming the model, and for an HTTP error what the server said.
 
@@ -78,7 +94,7 @@ def describe(error, model: str) -> str:
         # URLError carries a reason; a plain ValueError carries its message. Both
         # read better through str(), which keeps "empty reply" visible.
         detail = str(getattr(error, "reason", "") or error or "")
-    detail = " ".join(detail.split())
+    detail = _redact(" ".join(detail.split()))
     if len(detail) > MAX_DETAIL:
         detail = detail[:MAX_DETAIL] + "..."
     if detail:

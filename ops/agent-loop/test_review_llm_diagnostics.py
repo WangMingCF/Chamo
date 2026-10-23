@@ -190,3 +190,21 @@ def test_an_overload_still_uses_the_whole_retry_budget(client, monkeypatch, caps
     assert err.count("failed:") == client.ATTEMPTS, (
         "a 503 must still use every attempt: " + err)
     assert "refused credential" not in err
+
+def test_a_server_that_echoes_the_key_does_not_put_it_in_the_log(client, monkeypatch, capsys):
+    # A gateway refusing a request sometimes quotes the request back, Authorization
+    # header included. The log is readable by anyone with repo access.
+    body = json.dumps({"error": {"message": f"bad key: Bearer {KEY}", "type": "auth_error"}})
+    assert run(client, monkeypatch, http_error(body, code=403)) == 1
+    err = capsys.readouterr().err
+    assert KEY not in err, "the echoed key must be redacted before it reaches the log"
+    assert "[redacted]" in err, "the log must show that something was redacted"
+    assert "HTTPError 403" in err, "the useful part of the error must survive"
+
+
+def test_any_key_shaped_token_is_redacted_not_only_the_configured_one(client, monkeypatch, capsys):
+    body = json.dumps({"error": {"message": "tried sk-abcdef123456 before giving up"}})
+    assert run(client, monkeypatch, http_error(body, code=503)) == 1
+    err = capsys.readouterr().err
+    assert "sk-abcdef123456" not in err
+    assert "[redacted]" in err
