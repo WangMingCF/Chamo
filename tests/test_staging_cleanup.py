@@ -26,6 +26,11 @@ def _layout(tmp_path):
     record = tmp_path / "record"
     record.mkdir()
     root = platform_state.staging(out)
+    # The staging root must live under the output folder the caller owns:
+    # drop_staging calls rmdir on it, so a test pointed at a user-level state
+    # directory could delete real data. Pinned here so a future change to
+    # platform_state cannot quietly widen this test's blast radius.
+    assert root.parent == out, "staging root is not derived from the output folder"
     staged = root / (FINGERPRINT + "-deadbeef")
     staged.mkdir(parents=True)
     (staged / "page0001.png").write_bytes(b"x")
