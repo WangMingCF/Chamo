@@ -120,8 +120,21 @@ class Sink:
         batch = (self.count - 1) // self.limits.batch_files + 1
         relative = Path("upload") / f"batch_{batch:06d}" / f"{self.source.stem}_part{self.count:06d}{candidate.suffix.lower()}"
         if self.tree_relative is not None:
-            # Include the original extension to distinguish e.g. a.pdf and a.docx.
-            relative = Path("files") / self.tree_relative.parent / f"{self.source.name}_part{self.count:06d}{candidate.suffix.lower()}"
+            # The strict export is "the source itself", so a byte-identical copy keeps
+            # the source's own name. Only a real split (a PDF cut into parts, an Office
+            # file turned into page images) needs the part number, because those parts
+            # are not the source file. Appending _part000001 to a copy renamed what the
+            # user gave us: "透明图片.png_part000001.png" is not the file they opened,
+            # and it made the benchmark's own name-based check report a byte-identical
+            # export as missing (check_rag in scripts/bench_quality.py).
+            #
+            # A part keeps the source's whole name, extension included, so that a.pdf
+            # and a.docx in one folder cannot collide.
+            if candidate == self.source:
+                name = self.source.name
+            else:
+                name = f"{self.source.name}_part{self.count:06d}{candidate.suffix.lower()}"
+            relative = Path("files") / self.tree_relative.parent / name
         destination = self.directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         checksum = copy_digest(candidate, destination)

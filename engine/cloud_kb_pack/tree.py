@@ -85,7 +85,13 @@ def publish(directory: Path, root: Path, info: dict, replace_existing=False):
             # remove old results while conversion can still fail.
             records = [json.loads(line) for line in (directory / "parts.jsonl").read_text().splitlines()]
             parent = root / Path(records[0]["file"]).relative_to("files").parent
-            pattern = re.compile(re.escape(Path(info["source"]).name) + r"_part\d{6}\.[^.]+$")
+            # A previous export of this source is either the source's own name (a
+            # byte-identical copy, which is what the strict export now keeps) or that
+            # name plus a part number (a real split). Both count as "our previous
+            # output", so a re-run replaces the set it produced instead of leaving a
+            # stale copy beside the new one.
+            source_name = re.escape(Path(info["source"]).name)
+            pattern = re.compile(source_name + r"(?:_part\d{6}\.[^.]+)?$")
             if parent.is_dir() and any(pattern.fullmatch(p.name) for p in parent.iterdir()):
                 backup, archived_files, archived_jobs = archive_previous(root, info)
         with (directory / "parts.jsonl").open(encoding="utf-8") as old, rewritten.open("w", encoding="utf-8") as new:

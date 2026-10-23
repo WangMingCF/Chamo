@@ -451,7 +451,11 @@ def test_every_operation_the_page_offers_converts(server, tmp_path):
         ("pdf_split", [str(pdf)], {"pdf_pages": 3},
          {"讲义.pdf_part000001.pdf", "讲义.pdf_part000002.pdf"}),
         ("pdf_merge", [str(pdf), str(pdf2)], {}, {"讲义_合并.pdf"}),
-        ("rag", [str(rag_dir)], {}, {"组-RAG/透明图片.png_part000001.png"}),
+        # A byte-identical copy keeps the source's own name: the strict export is
+        # "the source itself", and renaming it to 透明图片.png_part000001.png changed
+        # what the user gets (and made the benchmark's name-based check report a
+        # correct export as missing).
+        ("rag", [str(rag_dir)], {}, {"组-RAG/透明图片.png"}),
     ]
     for operation, inputs, extra, expected in cases:
         out = tmp_path / ("out-" + operation)
