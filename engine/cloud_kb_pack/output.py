@@ -120,8 +120,47 @@ class Sink:
         batch = (self.count - 1) // self.limits.batch_files + 1
         relative = Path("upload") / f"batch_{batch:06d}" / f"{self.source.stem}_part{self.count:06d}{candidate.suffix.lower()}"
         if self.tree_relative is not None:
-            # Include the original extension to distinguish e.g. a.pdf and a.docx.
-            relative = Path("files") / self.tree_relative.parent / f"{self.source.name}_part{self.count:06d}{candidate.suffix.lower()}"
+            # The strict export is "the source itself", so a byte-identical copy keeps
+            # the source's own name. Only a real split (a PDF cut into parts, an Office
+            # file turned into page images) needs the part number, because those parts
+            # are not the source file. Appending _part000001 to a copy renamed what the
+            # user gave us: "透明图片.png_part000001.png" is not the file they opened,
+            # and it made the benchmark's own name-based check report a byte-identical
+            # export as missing (check_rag in scripts/bench_quality.py).
+            #
+            # A part keeps the source's whole name, extension included, so that a.pdf
+            # and a.docx in one folder cannot collide.
+            #
+            # A name can still collide within one run: a source that is itself called
+            # "x.pdf_part000001.pdf" (a previously exported part folder fed back in as
+            # a RAG source) publishes to the same path as a split part of x.pdf. Old
+            # naming could not collide because every file carried _partN; the
+            # copy-keeps-its-name rule removes that guarantee, so the collision is
+            # resolved here instead of surfacing as FileExistsError from the exclusive
+            # create. Both files are kept: the second one gets the part-numbered form,
+            # which is still unique, still in the export, and already matches the
+            # pattern tree.publish uses to recognise our own previous output.
+            if candidate == self.source:
+                name = self.source.name
+            else:
+                name = f"{self.source.name}_part{self.count:06d}{candidate.suffix.lower()}"
+            parent = Path("files") / self.tree_relative.parent
+            relative = parent / name
+            if (self.directory / relative).exists():
+                # self.directory is this run's fresh work directory, so "exists" here
+                # means "another file of this same export", never a previous export.
+                suffix = candidate.suffix.lower()
+                name = f"{self.source.name}_part{self.count:06d}{suffix}"
+                relative = parent / name
+                if (self.directory / relative).exists():
+                    # Both forms taken (two sources differing only by extension whose
+                    # names already look like parts). A counter keeps the export
+                    # complete rather than failing the file.
+                    base = Path(name).stem
+                    number = 1
+                    while (self.directory / relative).exists():
+                        number += 1
+                        relative = parent / f"{base}_dup{number}{suffix}"
         destination = self.directory / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         checksum = copy_digest(candidate, destination)

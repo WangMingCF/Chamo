@@ -85,7 +85,29 @@ def publish(directory: Path, root: Path, info: dict, replace_existing=False):
             # remove old results while conversion can still fail.
             records = [json.loads(line) for line in (directory / "parts.jsonl").read_text().splitlines()]
             parent = root / Path(records[0]["file"]).relative_to("files").parent
-            pattern = re.compile(re.escape(Path(info["source"]).name) + r"_part\d{6}\.[^.]+$")
+            # A previous export of this source is either the source's own name (a
+            # byte-identical copy, which is what the strict export now keeps) or that
+            # name plus a part number (a real split). Both count as "our previous
+            # output", so a re-run replaces the set it produced instead of leaving a
+            # stale copy beside the new one.
+            #
+            # A name that collided inside its own export can also carry one or two
+            # further markers (see Sink.emit): "..._part000001.pdf_part000001.pdf"
+            # when the colliding file was itself a part, or "..._part000001_dup2.pdf"
+            # in the last-resort case. Those belong to the same previous export, so
+            # they are recognised here too - otherwise a re-run would leave them
+            # behind beside the new set.
+            source_name = re.escape(Path(info["source"]).name)
+            # Recognise, in order: the source's own name; that name plus a part
+            # number (a real split); the same again when the colliding file was
+            # itself a part, which nests a second extension and part marker; and the
+            # last-resort _dupN form. Keeping this list in one pattern means a re-run
+            # archives the whole previous set whatever shape it took.
+            pattern = re.compile(
+                source_name
+                + r"(?:_part\d{6}\.[^.]+)*"           # a part, or a part of a part
+                + r"(?:_part\d{6}_dup\d+\.[^.]+)?"   # the last-resort unique name
+                + r"$")
             if parent.is_dir() and any(pattern.fullmatch(p.name) for p in parent.iterdir()):
                 backup, archived_files, archived_jobs = archive_previous(root, info)
         with (directory / "parts.jsonl").open(encoding="utf-8") as old, rewritten.open("w", encoding="utf-8") as new:
