@@ -347,18 +347,16 @@ jobs:
       - name: Validate PR-first proposal catalog
         run: python scripts/check_proposals.py
 
-      - name: Proposal schema and conflict tests
-        run: python -m unittest discover -s tests -p test_proposals.py -v
-
-      - name: Privacy and review API tests
+      - name: Proposal, privacy and review evidence tests
         run: |
           python -m pip install pytest==9.1.1
-          python -m pytest scripts/ci -q -rs
+          python -m pytest scripts/ci tests/test_proposals.py -q -rs
 
       - name: Shell scripts
         run: |
-          shellcheck -x scripts/ci/*.sh scripts/ci/hooks/pre-push
-          for f in scripts/ci/*.sh; do bash -n "$f"; done
+          shellcheck -x scripts/ci/hooks/pre-push scripts/ci_remote_test.sh scripts/ui_baselines.sh
+          bash -n scripts/ci_remote_test.sh
+          bash -n scripts/ui_baselines.sh
 
   ui:
     name: ui (${{ matrix.os }})

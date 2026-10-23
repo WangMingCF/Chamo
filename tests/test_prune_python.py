@@ -2,8 +2,8 @@
 
 pending() gates two things: a normal build prunes when it is true, and a
 CHAMO_NO_PRUNE control build refuses to run when it is false. A pending() that is
-always true makes the control build impossible; one that is always false ships an
-unpruned runtime. Both directions are tested here, on hand-built runtime layouts,
+always true lets an already pruned runtime pass as a control; one that is always
+false skips required pruning. Both directions are tested here, on hand-built runtime layouts,
 because the real 200 MB runtime only exists inside a packaged build.
 """
 from __future__ import annotations

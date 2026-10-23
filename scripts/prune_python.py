@@ -44,7 +44,7 @@ def pending(runtime: Path) -> bool:
     # any() over the generators themselves is always true (a generator object is
     # truthy), so this asked "were any globs created", not "did any match", and
     # pending() answered True even for a fully pruned runtime. That in turn made
-    # CHAMO_NO_PRUNE unable to ever accept a control build.
+    # CHAMO_NO_PRUNE accept an already pruned runtime as an unpruned control.
     if any(match for name in SITE_PACKAGES
            for match in (lib / "site-packages").glob(name + "*")):
         return True

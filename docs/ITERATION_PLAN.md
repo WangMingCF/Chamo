@@ -51,15 +51,15 @@
 - **多端功能单测**：按 `docs/CI_TESTING.md` 补测试并确认对应 CI 作业覆盖；它列出了每个必需检查覆盖什么、新功能必须补哪些用例、哪些部分 CI 覆盖不到。
 - **CI 不等于产品测试**：CI 覆盖引擎与打包；macOS GUI 需在打包后的应用里点击验证（`-D CHAMO_DEBUG` 钩子与截图）。
 
-## 3. 当前状态（2026-10-22，已核实）
+## 3. 状态快照（每轮以远端重新核实）
 
 | 项 | 状态 |
 | --- | --- |
-| 代码 | `main` = `3f03e18`；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
+| 代码 | 历史统计来自 2026-10-22；2026-10-23 核实主干已含 #46 质量检查器。最新 SHA、测试数与开放 PR 从 GitHub 获取，不沿用旧数字 |
 | 竞品 | `docs/COMPETITORS.md` 已入库：15 个产品、两张矩阵、每格标证据等级；**没有任何实测**，两处官方页面抓不到已标「待复核」，Kumquat 官网 404 未列入 |
-| 基准 | `scripts/bench_corpus.py`、`scripts/bench.py`、`scripts/bench_quality.py` 与 `tests/test_bench.py` 在 **PR #18**（三端 `test-matrix` 各 9/9 通过），合并前不作为基线引用 |
-| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、CI 工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
-| 发布 | **尚无任何 Release**。旧的本地发布脚本已删除，需要 GitHub Actions 发布流程 |
+| 基准 | 质量检查器已由 #46 合入，基准运行器在 #47；引用性能结论必须附准确版本与原始结果，不以脚本存在作为基线 |
+| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、CI 工具测试；`test-matrix` 按需跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
+| 发布 | v0.1.0 已公开（2026-10-22）；release.yml 已实现候选构建。后续版本需核验完整门禁与必要真机结果后正式发布 |
 | 签名 | macOS ad-hoc，未做 Developer ID 签名与公证；Windows 未签名 |
 | 能力 | PDF 转图片（分片成本模型、页级续跑）、PDF 拆分/合并/压缩、Office/WPS 转 PDF/图片、图片合成 PDF、图片转换/压缩、RAG 严格预处理；CLI `chamo`、本机浏览器界面 `chamo ui` |
 | 明确未实现 | OCR、PDF 转可编辑 Office、长图、多帧拆分、命名模板、目标体积、空间预估、Office 转换前审计、报告导出、Finder 快捷动作（直接转换）、压缩包解包、音视频 |
@@ -266,5 +266,5 @@
 | 无 Apple Developer ID / 公证 | 首次打开被 Gatekeeper 拦截 | 维护者决定是否付费；在此之前所有文档写明 ad-hoc |
 | 无 Windows 代码签名 | SmartScreen 警告 | 同上 |
 | 真实样本 | OCR 与 Office 保真需要真实文档验收 | 只用维护者提供的小份只读样本，不入库 |
-| `agent-review` 服务对大 diff 无响应 | 评审作业 15 分钟以上不出结果、或 5 分钟被对端断开，PR 无法合并 | 已在 #5 请维护者核查代理的读超时与配置；开发侧对策是把 PR 拆小 |
-| Linux CI 缺 LibreOffice Calc | `.xlsx` 转换在 Linux 上没有任何自动化验证 | 建议在 `.github/actions/setup-engine` 增加 `libreoffice-calc`（受保护路径，需维护者审核） |
+| 旧 diff 评审服务无响应 | 历史评审曾因大 diff 超时 | 当前入口改为 Mac-DSH 主动审查完整源码并提交签名证据；不能以缺少报告放行 |
+| Linux CI 缺 LibreOffice Calc | `.xlsx` 转换在 Linux 上没有任何自动化验证 | 建议在 `.github/actions/setup-engine` 增加 `libreoffice-calc`（需独立审查与工作流验证） |

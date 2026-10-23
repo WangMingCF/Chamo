@@ -1,6 +1,6 @@
 # 开发说明
 
-需求见 [提案目录](../proposals/README.md)，测试见 [CI_TESTING.md](CI_TESTING.md)，全部文档见 [文档目录](README.md)。
+需求见 [提案目录](../proposals/README.md)，测试见 [CI_TESTING.md](CI_TESTING.md)。
 
 ## 项目结构
 
@@ -11,9 +11,9 @@
 | `scripts/` | 依赖下载、构建、打包与 CI 验收脚本 |
 | `tests/` | 引擎测试（pytest）与 Swift 单元测试 |
 | `assets/brand/` | Logo、图标与吉祥物的源文件和生成脚本 |
-| `proposals/` | 需求总目录、每项 PR 摘要、详细 PRD 与元数据 |
+| `proposals/` | 需求总目录、每项详细 PRD（含状态与设备负责人） |
 | `docs/` | 使用、架构、开发流程、测试规则与版本队列 |
-| `scripts/ci/` | 隐私检查、独立评审与维护者审核工具 |
+| `scripts/ci/` | 隐私检查与 DSH 独立评审结果验证工具 |
 | `.development/` | 私有持续开发规范与部署记录，Git 忽略 |
 | `uitests/` | 浏览器与原生界面的端到端测试及基准截图 |
 | `build/`、`dist/`、`release/` | 可再生构建产物、覆盖率与验证结果，不提交 |
@@ -69,3 +69,7 @@ Windows 与 Linux 包由 CI 构建：`scripts/build_windows.py --out dist` 生�
 ## 品牌资源
 
 修改 `assets/brand/` 下的源脚本后运行 `assets/brand/build.sh`，会重新生成 SVG、`Chamo.icns` 和 README 用到的 PNG。说明见 [assets/brand/README.md](../assets/brand/README.md)。
+
+## 文档入口
+
+使用与下载见 [使用说明](USER_GUIDE.txt)、[更新说明](RELEASE_NOTES.txt)；产品方向见 [路线图](ROADMAP.txt)，开发顺序与事实记录见 [迭代计划](ITERATION_PLAN.md)。界面验收见 [UI 测试](../uitests/README.md)，依赖许可见 [第三方许可](LICENSES.txt)，调研证据见 [竞品资料](COMPETITORS.md)。需求只在 proposals 中维护，详细执行提示词与设备日志保存在被 Git 忽略的 .development 中。

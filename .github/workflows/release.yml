@@ -2,8 +2,8 @@ name: release
 
 # Builds every distributable from a clean runner, verifies each one the way a
 # user would get it (install or mount, launch, convert), and only then creates a
-# DRAFT GitHub Release with the assets and SHA256SUMS.txt. The maintainer reads
-# the draft and publishes it; nothing here publishes on its own.
+# DRAFT GitHub Release with the assets and SHA256SUMS.txt. DSH verifies the
+# candidate, obtains required Mac evidence, then publishes the verified draft.
 #
 # Triggers:
 #   * a tag v<version> matching config/release.json  -> build, verify, draft release
@@ -30,6 +30,7 @@ on:
       - scripts/build_linux.py
       - scripts/build_windows.py
       - scripts/collect_sources.py
+      - scripts/ci/privacy_scan.py
       - third_party/dependencies.json
       - third_party/requirements.lock
   workflow_dispatch:
@@ -181,6 +182,19 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libreoffice-core libreoffice-impress libreoffice-writer fonts-noto-cjk
           bash scripts/verify_deb.sh
+      - name: Scan installed Linux project files
+        env:
+          PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
+        run: |
+          if [ -z "$PRIVACY_KEYWORDS" ]; then
+            [ -z "$RELEASE_TAG" ] || { echo "Privacy configuration required"; exit 1; }
+            echo "::warning::No privacy configuration on verification-only run"; exit 0
+          fi
+          printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
+          dpkg-deb -e dist/chamo-cli_*.deb "$RUNNER_TEMP/package-control"
+          python scripts/ci/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" files \
+            /opt/chamo/engine /usr/share/doc/chamo-cli /usr/bin/chamo "$RUNNER_TEMP/package-control"
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist-linux-${{ matrix.arch }}
@@ -218,6 +232,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$pkg/python/python.exe" scripts/verify_ui.py --chamo "$pkg/chamo.cmd" --work dist/ui-accept
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Scan extracted Windows project files
+        shell: python
+        env:
+          PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
+        run: |
+          import os, pathlib, subprocess, sys
+          value = os.environ.get('PRIVACY_KEYWORDS', '')
+          if not value:
+              if os.environ.get('RELEASE_TAG'): raise SystemExit('Privacy configuration required')
+              print('::warning::No privacy configuration on verification-only run')
+              sys.exit(0)
+          keywords = pathlib.Path(os.environ['RUNNER_TEMP']) / 'kw.txt'
+          keywords.write_text(value)
+          package = pathlib.Path('dist/extracted/chamo')
+          files = [package / 'engine', *[p for p in package.iterdir() if p.is_file()]]
+          subprocess.run([sys.executable, 'scripts/ci/privacy_scan.py', '--keywords', str(keywords),
+                          'files', *map(str, files)], check=True)
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist-windows

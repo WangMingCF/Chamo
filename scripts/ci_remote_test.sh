@@ -28,15 +28,15 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ] || \
     echo "note: local changes or unpushed commits are NOT tested; runners use origin/$ref" >&2
 fi
 
-started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+request_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
 gh workflow run test-matrix.yml --ref "$ref" -f platforms="$platforms" -f tests="$tests" \
-    -f filter="$filter" -f repeat="$repeat"
+    -f filter="$filter" -f repeat="$repeat" -f request_id="$request_id"
 
 # The dispatch call returns no run id; find the run it created.
 run=""
 for _ in $(seq 1 30); do
-    run=$(gh run list --workflow test-matrix.yml --branch "$ref" --event workflow_dispatch -L 5 \
-        --json databaseId,createdAt -q "[.[] | select(.createdAt >= \"$started\")][-1].databaseId // empty")
+    run=$(gh run list --workflow test-matrix.yml --branch "$ref" --event workflow_dispatch -L 100 \
+        --json databaseId,displayTitle -q "[.[] | select(.displayTitle == \"test-matrix $request_id\")][0].databaseId // empty")
     [ -n "$run" ] && break
     sleep 4
 done

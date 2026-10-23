@@ -1,11 +1,11 @@
 name: test-matrix
+run-name: test-matrix ${{ inputs.request_id || github.event_name }}
 
-# Multi-platform verification on demand and every night, beyond the PR gate:
+# Multi-platform verification on demand, beyond the PR gate:
 #   * on demand: an agent on Linux can run any tests on Windows and macOS runners
 #     (scripts/ci_remote_test.sh wraps this), optionally repeated to expose
 #     flaky tests;
-#   * nightly: the full suite on the wider runner set, three times, so a race
-#     that the single PR run misses shows up as "flaky" in the summary.
+# The task owner selects platforms and repeats from actual risk and failures.
 # Every run is judged by scripts/ci_report.py: failures, flaky tests, skips not
 # registered in tests/ci_allowed_skips.json, and empty runs all fail.
 # workflow_dispatch only works once this file is on the default branch; after
@@ -13,6 +13,10 @@ name: test-matrix
 on:
   workflow_dispatch:
     inputs:
+      request_id:
+        description: Unique dispatch ID for matching this exact run
+        type: string
+        default: manual
       platforms:
         description: "core = ubuntu/windows/macos latest; extended = more OS versions and arm64; or one of linux/windows/macos"
         type: choice
@@ -30,8 +34,6 @@ on:
         description: "how many times to run the selection (1-10); more than 1 detects flaky tests"
         type: number
         default: 1
-  schedule:
-    - cron: "17 19 * * *"   # nightly, outside the working day in UTC+8
 
 permissions:
   contents: read
@@ -51,8 +53,8 @@ jobs:
         # Inputs reach the script through env, never through ${{ }} inside the
         # script text, so a crafted input cannot inject shell.
         env:
-          PLATFORMS: ${{ github.event_name == 'schedule' && 'extended' || inputs.platforms }}
-          REPEAT: ${{ github.event_name == 'schedule' && '3' || inputs.repeat }}
+          PLATFORMS: ${{ inputs.platforms }}
+          REPEAT: ${{ inputs.repeat }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
@@ -85,8 +87,8 @@ jobs:
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
-          TESTS: ${{ github.event_name == 'schedule' && 'tests' || inputs.tests }}
-          FILTER: ${{ github.event_name == 'schedule' && '' || inputs.filter }}
+          TESTS: ${{ inputs.tests }}
+          FILTER: ${{ inputs.filter }}
           REPEAT: ${{ needs.plan.outputs.repeat }}
         run: |
           mkdir -p results
@@ -95,7 +97,14 @@ jobs:
             echo "::group::run $i of $REPEAT"
             args=(-q -rs --tb=short -p no:cacheprovider --junitxml="results/run-$i.xml")
             [ -n "$FILTER" ] && args+=(-k "$FILTER")
-            python -m pytest "${selection[@]}" "${args[@]}" 2>&1 | tee "results/run-$i.log" || true
+            set +e
+            python -m pytest "${selection[@]}" "${args[@]}" 2>&1 | tee "results/run-$i.log"
+            codes=("${PIPESTATUS[@]}")
+            set -e
+            # Preserve both pytest and log-write failures, even when XML exists.
+            code=${codes[0]}
+            [ "${codes[1]}" -eq 0 ] || code=${codes[1]}
+            printf '%s\n' "$code" > "results/run-$i.exit"
             echo "::endgroup::"
           done
 
@@ -104,9 +113,11 @@ jobs:
         shell: bash
         env:
           PYTHONIOENCODING: utf-8
+          REPEAT: ${{ needs.plan.outputs.repeat }}
         run: |
           status=0
           python scripts/ci_report.py --platform ${{ matrix.label }} --skips tests/ci_allowed_skips.json \
+            --expected-runs "$REPEAT" --exit-codes-dir results \
             --title "${{ matrix.os }}" --summary "results/summary.md" results/run-*.xml || status=$?
           cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
           exit $status

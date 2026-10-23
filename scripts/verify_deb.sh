@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the built Linux package and convert with it.
 #
-# Shared by scripts/test_linux_package.py (Docker) and the CI job that publishes the
+# Used by Linux CI and the release job that publishes the
 # artifact, so there is one definition of "the package works". Each step prints a
 # PASS/FAIL line, because a bare exit code does not say which promise broke.
 #
