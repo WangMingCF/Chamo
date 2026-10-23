@@ -82,6 +82,15 @@ def test_summarise_reports_median_and_spread_and_ignores_timeouts():
     assert bench.summarise([{"seconds": 9.0, "timed_out": True}])["median_seconds"] is None
 
 
+def test_summarise_ignores_a_run_that_exited_non_zero():
+    """A crashed run measured the crash, not the work; it must not move the median."""
+    runs = [{"seconds": 2.0, "rc": 0}, {"seconds": 2.2, "rc": 0},
+            {"seconds": 40.0, "rc": 1}]
+    summary = bench.summarise(runs)
+    assert summary["median_seconds"] == 2.1, summary
+    assert summary["max_seconds"] == 2.2, summary
+
+
 def test_the_smoke_suite_runs_and_reports(tmp_path):
     report_path = tmp_path / "bench.json"
     completed = subprocess.run(

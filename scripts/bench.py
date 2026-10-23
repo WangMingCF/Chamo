@@ -385,7 +385,7 @@ def summarise(runs: list) -> dict:
     # work (start-up failure, a crash part-way through), so its number must not
     # reach the median even when the case-level timing is already suppressed.
     times = [run["seconds"] for run in runs
-             if not run.get("timed_out") and run.get("rc") == 0]
+             if not run.get("timed_out") and run.get("rc", 0) == 0]
     if not times:
         return {"median_seconds": None, "min_seconds": None, "max_seconds": None,
                 "spread": None}
