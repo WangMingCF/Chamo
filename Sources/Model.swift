@@ -278,6 +278,21 @@ enum Phase { case idle, running, finished }
     @Published var items: [QueueItem] = []
     @Published var selection = Set<UUID>()
     @Published var showInspector = true
+    /// The one place that changes the inspector's visibility.
+    ///
+    /// The toolbar button and the debug hook both go through here on purpose: a
+    /// scenario that assigned the flag directly would run without the animation
+    /// transaction the button uses, and the macOS 27 abort happens *inside* that
+    /// transaction ("more Update Constraints in Window passes than there are
+    /// views", raised from SplitViewChildController.hostingView(_:didUpdateMinSize:)
+    /// while the inspector column is being added or removed). A test that skips the
+    /// animation therefore cannot reproduce what a user does.
+    func setInspector(_ open: Bool) {
+        guard open != showInspector else { return }
+        withAnimation { showInspector = open }
+    }
+
+    func toggleInspector() { setInspector(!showInspector) }
 
     @Published var format = "png"; @Published var dpi = 150; @Published var quality = 90
     @Published var paper = "original"; @Published var marginMM = 10

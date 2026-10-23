@@ -4,6 +4,7 @@ import Quartz
 
 struct ContentView: View {
     @EnvironmentObject var m: Workbench
+
     var body: some View {
         NavigationSplitView {
             Sidebar().navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
@@ -14,6 +15,11 @@ struct ContentView: View {
             case .tool: WorkspaceView()
             }
         }
+        // Back to a flat minimum: the inspector is no longer a split-view column, so it
+        // no longer adds its own 300 points here (see WorkspaceView). The earlier 680
+        // variant assumed the crash was a total-width problem; Mac-DSH reproduced it at
+        // a 1024-point window, where 680 + 300 = 980 already fits, so that hypothesis is
+        // dead and the minimum stays as it was.
         .frame(minWidth: 980, minHeight: 640)
         .sheet(isPresented: $m.showFeedback) { FeedbackView(model: m) }
         .sheet(isPresented: $m.showPalette) { CommandPalette() }

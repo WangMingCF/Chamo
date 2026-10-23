@@ -146,6 +146,7 @@ import Quartz
 ///   {"set": {"format", "dpi", "quality", "max_edge", "lossy", "range", "beside"}}
 ///   {"appearance": "dark"|"light"} {"start": true} {"cancel": true} {"retry": true}
 ///   {"wait": "finished", "timeout": seconds} {"sleep": seconds}
+///   {"inspector": bool} {"resize": {"width", "height"}}
 ///   {"snapshot": name, "sheet": bool} {"summary": name}
 /// Results go to CHAMO_SCENARIO_OUT: name.png per snapshot, name.json per summary
 /// (Workbench.debugSummary), and result.json ({"ok", "step", "error"}); the process
@@ -173,6 +174,49 @@ import Quartz
         if let paths = s["add"] as? [String] { m.add(paths.map { URL(fileURLWithPath: $0) }); next(1.0); return }
         if let output = s["output"] as? String { m.output = output; next(0.2); return }
         if let set = s["set"] as? [String: Any] { apply(m, set); next(0.3); return }
+        // The inspector is a user-facing control (the toolbar button "设置面板"), so a
+        // scenario has to be able to press it *the way the button does*. This step goes
+        // through Workbench.setInspector, the same entry point the button uses, so the
+        // animation transaction and the resulting layout invalidation are exercised -
+        // assigning the flag directly skipped exactly the code path the macOS 27 abort
+        // happens in (verify-tool-inspector-constraint-20261023d). The state is echoed in
+        // the summary so a run reports what it saw instead of only an exit code.
+        if let want = s["inspector"] as? Bool { m.setInspector(want); next(0.6); return }
+        // {"resize": {"width": 1024, "height": 744}} sets the document window's content
+        // size. This is the debug capability from #53, carried here on its own so a
+        // real-window regression can be driven unattended: Mac-DSH has no desktop
+        // drag tool, and a hand-dragged corner cannot be repeated. Only the pure hook
+        // is taken - none of #53's product layout changes come with it.
+        if let size = s["resize"] as? [String: Any] {
+            let width = (size["width"] as? NSNumber)?.doubleValue
+            let height = (size["height"] as? NSNumber)?.doubleValue
+            guard let width, let height, width >= 320, height >= 240 else {
+                finish(dir, ok: false, step: i, error: "resize needs width and height >= 320x240")
+                return
+            }
+            // The document window, never a panel: a sheet or the palette is also in
+            // NSApp.windows and also visible, and resizing the wrong one would leave
+            // the test looking at the default size while claiming 1024.
+            guard let window = NSApp.mainWindow
+                    ?? NSApp.windows.first(where: { $0.contentView != nil && $0.canBecomeMain && $0.isVisible }) else {
+                finish(dir, ok: false, step: i, error: "resize: no main window to resize")
+                return
+            }
+            // Resize outside the current runloop turn: doing it inline puts the change
+            // inside SwiftUI's own update cycle, which is where macOS 27 aborts
+            // ("...more Update Constraints in Window passes than there are views").
+            // Skipping a resize that would not change anything keeps the pass count
+            // bounded. The wait after this step is longer than the delay, so the next
+            // step cannot race it.
+            let target = NSSize(width: width, height: height)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                let current = window.contentView?.frame.size ?? .zero
+                let unchanged = abs(current.width - target.width) < 0.5
+                    && abs(current.height - target.height) < 0.5
+                if !unchanged { window.setContentSize(target) }
+            }
+            next(1.0); return
+        }
         if let look = s["appearance"] as? String {
             NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua); next(0.8); return
         }
@@ -243,6 +287,7 @@ extension Workbench {
         let payload: [String: Any] = ["tool": operation, "route": String(describing: route),
                                       "phase": String(describing: phase), "running": running,
                                       "notice": notice, "report": report, "output": targetOutput,
+                                      "inspector": showInspector,
                                       "items": items, "histories": histories]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
         return String(data: data, encoding: .utf8) ?? "{}"

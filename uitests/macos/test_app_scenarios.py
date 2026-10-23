@@ -162,3 +162,73 @@ def test_cancel_leaves_the_output_folder_clean(work):
     leftovers = sorted(str(p.relative_to(work / "out")) for p in (work / "out").rglob("*"))
     assert leftovers == [], f"a cancelled run left files in the output folder: {leftovers}"
     assert sha(pdf) == before
+
+
+def test_an_empty_tool_page_does_not_crash(work):
+    """Entering a tool with nothing queued must not kill the app, panel included.
+
+    On macOS 27 the window aborted with "more Update Constraints in Window passes
+    than there are views" as soon as a tool page appeared - before any file was
+    added, with no resize and no conversion (Mac-DSH follow-up on
+    verify-narrow-window-20261023c). The CI runner's macOS does not reproduce it,
+    so this is a smoke guard rather than a pixel baseline: the assertion is that
+    the process was still alive and produced a snapshot at all.
+
+    The panel is toggled here as well, because a candidate once "fixed" the abort
+    by moving the inspector out of the detail column - which made the panel stop
+    appearing altogether (Mac-DSH ac2/ac4 on c9c0d18). A crash-free window with the
+    panel missing is not a fix.
+
+    The toggle goes through Workbench.setInspector, the same entry point the
+    toolbar button uses. An earlier version of this scenario assigned the flag
+    directly, so it never ran the animation/layout transaction in which macOS 27
+    aborts ("...more Update Constraints in Window passes than there are views",
+    raised while the inspector column's minimum size changes) - the hook passed
+    and the real button still crashed the app (verify-tool-inspector-constraint-
+    20261023d). The sequence below also narrows the window to 1024 with the panel
+    open and walks out to the overview and back, which is what Mac-DSH was doing
+    when it aborted. On macOS 15 the abort itself cannot be reproduced, so the
+    crash verdict still comes from the macOS 27 request
+    verify-tool-inspector-constraint-20261023e; this case guards everything else.
+    """
+    out = run(work, "empty-tool", [{"tool": "pdf_images"}, {"sleep": 1},
+                                   {"snapshot": "empty-tool"},
+                                   # The summary step is what writes empty-tool.json. Asking
+                                   # for it is also the liveness proof: the harness only
+                                   # writes the file after answering the last step, so a
+                                   # process that died after the snapshot leaves no summary.
+                                   {"summary": "empty-tool"},
+                                   {"inspector": False}, {"sleep": 0.6},
+                                   {"snapshot": "empty-tool-panel-closed"},
+                                   {"summary": "inspector-closed"},
+                                   {"inspector": True}, {"sleep": 0.6},
+                                   {"snapshot": "empty-tool-inspector"},
+                                   {"summary": "inspector-open"},
+                                   {"resize": {"width": 1024, "height": 744}}, {"sleep": 1},
+                                   {"snapshot": "empty-tool-narrow"},
+                                   {"summary": "narrow"},
+                                   {"route": "home"}, {"sleep": 1},
+                                   {"summary": "home"},
+                                   {"tool": "pdf_images"}, {"sleep": 1},
+                                   {"snapshot": "empty-tool-back"},
+                                   {"summary": "back"}])
+    for name in ("empty-tool", "empty-tool-panel-closed", "empty-tool-inspector",
+                 "empty-tool-narrow", "empty-tool-back"):
+        assert (out / (name + ".png")).is_file(), \
+            f"the app produced no snapshot for {name}"
+    base = summary(out, "empty-tool")
+    assert base, "the scenario produced no summary"
+    # run() gives each scenario its own CHAMO_STATE_DIR/CHAMO_APP_SUPPORT, so the
+    # starting state is the app default, not a leftover from another test.
+    assert base["inspector"] is True, \
+        f"a tool page should start with the inspector open: {base['inspector']!r}"
+    assert summary(out, "inspector-closed")["inspector"] is False, \
+        "the panel did not close through the shared toggle"
+    assert summary(out, "inspector-open")["inspector"] is True, \
+        "the panel did not reopen through the shared toggle"
+    assert summary(out, "narrow")["inspector"] is True, \
+        "the panel did not survive narrowing the window to 1024"
+    assert summary(out, "home")["inspector"] is True, \
+        "the panel state was lost on the overview page"
+    assert summary(out, "back")["inspector"] is True, \
+        "the panel did not come back with the tool page"
