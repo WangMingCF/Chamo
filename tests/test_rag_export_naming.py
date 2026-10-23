@@ -121,3 +121,44 @@ def test_the_benchmark_check_now_accepts_a_copy_under_its_own_name(tmp_path, out
 
     export = work / "files"
     assert quality.check_rag([source], export) == [], quality.check_rag([source], export)
+
+def test_a_source_whose_name_looks_like_a_part_does_not_collide(tmp_path, output):
+    """Both files must survive when two names land on the same path.
+
+    A strict export used to give every file a _partN marker, so no two files could
+    collide. Keeping the source's own name for a byte-identical copy removes that
+    guarantee: a source literally called "a.pdf_part000001.pdf" (a previously
+    exported part folder fed back in as a RAG source) publishes to the same path as
+    a split part of a.pdf. That surfaced as FileExistsError, so the file failed.
+    Both must be kept, in either emission order.
+    """
+    for order in (("split", "copy"), ("copy", "split")):
+        work = tmp_path / ("work-" + "-".join(order))
+        work.mkdir()
+        split_source = tmp_path / "a.pdf"
+        split_source.write_bytes(b"the source pdf")
+        part = tmp_path / "structured-0.pdf"
+        part.write_bytes(b"part one")
+
+        def do_split():
+            sink = _sink(output, work, split_source)
+            sink.emit(part, "document", {"operation": "split"},
+                      verified={"bytes": part.stat().st_size, "pages": 1})
+            sink.close()
+
+        def do_copy():
+            odd = tmp_path / "a.pdf_part000001.pdf"
+            odd.write_bytes(b"a source whose name looks like a part")
+            sink = _sink(output, work, odd)
+            sink.emit(odd, "document", {"operation": "copy_native"},
+                      verified={"bytes": odd.stat().st_size})
+            sink.close()
+
+        {"split": do_split, "copy": do_copy}[order[0]]()
+        {"split": do_split, "copy": do_copy}[order[1]]()   # must not raise
+
+        written = {path.name: path.read_bytes()
+                   for path in (work / "files").iterdir() if path.is_file()}
+        assert b"part one" in written.values(), (order, sorted(written))
+        assert b"a source whose name looks like a part" in written.values(), (order, sorted(written))
+        assert len(written) == 2, (order, sorted(written))
