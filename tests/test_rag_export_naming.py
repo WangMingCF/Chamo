@@ -65,7 +65,10 @@ def test_a_real_split_still_says_which_part_it_is(tmp_path, output):
     sink = _sink(output, work, source)
     for index in (1, 2):
         part = tmp_path / ("structured-%d.pdf" % index)
-        part.write_bytes(b"%PDF-1.4 part %d" % index)
+        # Escape the percent in the PDF magic: bytes %-formatting reads "%P" as a
+        # conversion and raises. (This is what CI caught that my hand-run did not:
+        # the hand-run used a different byte string.)
+        part.write_bytes(b"%%PDF-1.4 part %d" % index)
         sink.emit(part, "document", {"operation": "page_window"},
                   verified={"bytes": part.stat().st_size, "pages": 1})
     sink.close()
