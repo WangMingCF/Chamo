@@ -856,7 +856,30 @@ def shard_render(path,work,cfg,stem,budget,info,cache=None):
                         f'预计 {gain:.3f}×，分给 {shards} 个进程'))
     return render_sharded(path,work,cfg,stem,selected,shards,cache=cache)
 
+# Containers a genuine file of that suffix starts with. LibreOffice does not refuse a
+# file whose content is not what the suffix says: a text file named deck.pptx is
+# imported as plain text and "converted" to a one-page PDF of that text, with exit
+# code 0. The engine then reported the item as complete, so the user was handed a
+# PDF of garbage as if it were their presentation.
+ZIP_OFFICE = {'.docx','.docm','.dotx','.pptx','.pptm','.ppsx','.potx','.xlsx','.xlsm','.xltx','.xlsb',
+              '.odt','.odp','.ods','.odg'}
+# Mislabelled but real documents LibreOffice does open correctly: a legacy binary
+# (OLE) or an RTF saved under an OOXML suffix. They keep working.
+_OFFICE_HEADS = (b'PK\x03\x04', b'PK\x05\x06', b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1', b'{\\rtf')
+
+def office_container_problem(path):
+    """Why this file cannot be the Office document its suffix claims, or None."""
+    suffix=Path(path).suffix.lower()
+    if suffix not in ZIP_OFFICE:return None
+    try:
+        with open(path,'rb') as handle:head=handle.read(8)
+    except OSError:return None          # let the real conversion report unreadable files
+    if any(head.startswith(magic) for magic in _OFFICE_HEADS):return None
+    return f'不是有效的 {suffix} 文件：文件内容不是 Office 文档（可能被改了扩展名或已损坏）'
+
 def office_pdf(path, work, cfg):
+    problem=office_container_problem(path)
+    if problem:raise ValueError(problem)
     # The request carries the renderer the app wants to use. When it is absent or
     # not executable here (a macOS bundle on Linux, a moved install), fall back to
     # platform discovery instead of failing on a stale path.
