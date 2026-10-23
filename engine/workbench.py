@@ -975,7 +975,7 @@ def convert(sources, work, cfg, shard_budget=1, shard_info=None, cache=None):
         from cloud_kb_pack.config import Limits
         lim=Limits(pdf_pages=cfg['pdf_pages'],pdf_bytes=cfg['pdf_bytes'],image_bytes=cfg.get('image_bytes',20_000_000),document_bytes=cfg.get('document_bytes',150_000_000),text_bytes=cfg.get('text_bytes',10_000_000),table_bytes=cfg.get('table_bytes',10_000_000),table_rows=cfg.get('table_rows',100000),batch_files=cfg.get('batch_files',50))
         store=work/'audit';store.mkdir();upload=work/'upload';upload.mkdir()
-        process(s,store,lim,{'policy':'strict','pdf_mode':'split','encoding':'utf-8-sig','page_window':100,'timeout':600,'header_rows':1,'csv_field_bytes':10_000_000},False,tree_relative=Path(s.name),upload_root=upload,work_root=work)
+        process(s,store,lim,rag_options(cfg),False,tree_relative=Path(s.name),upload_root=upload,work_root=work)
         for x in upload.iterdir():
             if x.is_file():shutil.move(x,work/x.name)
     elif op in ('image_convert','image_compress'):
@@ -1754,6 +1754,17 @@ def auto_workers():
     """
     return min(6,max(2,(os.cpu_count() or 4)-2))
 
+def rag_options(cfg):
+    """Options for the strict RAG / PDF-split sub-process.
+
+    timeout comes from the request, like everywhere else: this path used to hardcode
+    600 s, so a caller who raised the timeout for a big document was still cut off at
+    600, and one who lowered it got no benefit here.
+    """
+    return {'policy':'strict','pdf_mode':'split','encoding':'utf-8-sig','page_window':100,
+            'timeout':cfg.get('timeout',600),'header_rows':1,'csv_field_bytes':10_000_000}
+
+
 def validate(cfg):
     if cfg.get('operation') not in OPS:raise ValueError('未知转换类型')
     # workers=0 means "choose automatically". The GUI resolves it in Swift, but a
@@ -1789,6 +1800,14 @@ def validate(cfg):
     if not isinstance(cfg.get('margin_mm',10),int) or not 0<=cfg.get('margin_mm',10)<=50:raise ValueError('边距应为 0–50 mm')
     for key in ('image_bytes','document_bytes','text_bytes','table_bytes','table_rows'):
         if key in cfg and (not isinstance(cfg[key],int) or cfg[key]<=0):raise ValueError(key+' 必须大于零')
+    # timeout is the one numeric knob that was never checked. subprocess.run raises
+    # TimeoutExpired at once for timeout=0, and treats None as "wait forever", so a
+    # request carrying either turned every Office conversion into an internal error
+    # (or a run that can never end) instead of a message the caller can act on.
+    if 'timeout' in cfg:
+        value=cfg['timeout']
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not value>0:
+            raise ValueError('timeout 必须是大于 0 的秒数：0 会立刻超时，null 表示永不超时，二者都不是有效请求')
     if cfg.get('format','png') not in ['png','jpeg','tiff','bmp','webp']:raise ValueError('不支持的输出格式')
     if cfg.get('naming','tagged') not in ('clean','tagged'):raise ValueError('无效命名方式')
     if cfg.get('operation')=='pdf_compress':
