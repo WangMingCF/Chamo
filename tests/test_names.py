@@ -64,3 +64,16 @@ def test_real_file_can_be_created_with_a_long_name(tmp_path):
     target = tmp_path / name
     target.write_bytes(b"x")
     assert target.exists()
+
+def test_a_dot_component_is_never_kept():
+    """`Path("...pdf").stem` is "..": joining that as a folder escapes the output dir."""
+    for name in (".", ".."):
+        result = names.sanitize(name)
+        assert result not in (".", ".."), f"{name!r} must not survive as a path component"
+        assert result.strip(), "must still produce a usable name"
+
+
+def test_a_long_dot_name_still_round_trips():
+    # Only the two directory references are special; longer dot runs are real names.
+    assert names.sanitize("...") == "..."
+    assert names.sanitize("a...") == "a..."

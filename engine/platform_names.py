@@ -34,6 +34,13 @@ def sanitize(name: str, max_bytes: int = NAME_MAX_BYTES) -> str:
         name = name.replace("/", "_").replace("\x00", "_")
     if not name.strip():
         return "_"
+    if name in (".", ".."):
+        # A component is a file or folder name, never a directory reference. This
+        # is reachable from a real filename: Path("...pdf").stem is "..", and the
+        # multi-page image naming joins it as a folder, so the output landed in the
+        # parent of the folder the user chose. Windows already collapsed these to
+        # "_" through the rstrip above; POSIX kept them.
+        return "_"
     return truncate(name, max_bytes)
 
 
