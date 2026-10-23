@@ -53,10 +53,10 @@ MUTATIONS = [
              "        proc.send_signal(sig)  # MUTATION: direct child only"),
             # Windows: never close the kill-on-close Job Object.
             ("_WINDOWS_TERMINATE",
-             'def _windows_terminate(proc: subprocess.Popen) -> None:\n'
-             '    job = getattr(proc, "_chamo_job", None)',
-             'def _windows_terminate(proc: subprocess.Popen) -> None:\n'
-             '    job = None  # MUTATION: never close the job (direct child only)'),
+             "    # shard renderers a worker spawns for a large image-dominant PDF.\n"
+             "    close_job_once(proc)\n",
+             "    # shard renderers a worker spawns for a large image-dominant PDF.\n"
+             "    pass  # MUTATION: never close the job (direct child only)\n"),
             # Windows: suspend/resume the worker PID only.
             ("_WINDOWS_APPLY",
              "    pids = _job_pids(job) if job else []\n    if not pids:\n        pids = [proc.pid]",
