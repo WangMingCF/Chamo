@@ -1,4 +1,4 @@
-"""Checks for privacy_scan.py. Run: python3 -m pytest ops/agent-loop -q"""
+"""Checks for privacy_scan.py. Run: python3 -m pytest scripts/ci -q"""
 from __future__ import annotations
 
 import subprocess
@@ -7,7 +7,7 @@ from pathlib import Path
 
 SCAN = Path(__file__).with_name("privacy_scan.py")
 SECRET = "Zhang Synthetic"  # a made-up value standing in for a private identifier
-ID = ["-c", "user.name=DeepSeek Harness", "-c", "user.email=dsh@chamo.invalid"]
+ID = ["-c", "user.name=Chamo", "-c", "user.email=dev@chamo.invalid"]
 
 
 def run(*args, stdin="", cwd=None, keywords=None):

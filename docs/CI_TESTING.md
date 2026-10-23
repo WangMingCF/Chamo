@@ -8,7 +8,7 @@
 
 | 工作流 | 何时运行 | 作用 |
 | --- | --- | --- |
-| `cross-platform` | 每个 PR、每次推送到 main | 合并门禁：三端引擎测试、打包后转换、Swift 编译与单测、自循环工具测试；汇总为一项检查 `all checks` |
+| `cross-platform` | 每个 PR、每次推送到 main | 合并门禁：三端引擎测试、打包后转换、Swift 编译与单测、CI 工具测试；汇总为一项检查 `all checks` |
 | `agent-review` | PR 打开或更新时 | 独立评审：用另一个模型审 diff，并做服务端隐私与提交身份检查，结果写成提交状态 `agent-review` |
 | `test-matrix` | 手动触发（含 `scripts/ci_remote_test.sh`）；每晚一次 | 按需在任意平台跑任意测试、可重复运行找不稳定测试；夜间在更多系统版本和 arm64 上把全套跑 3 遍 |
 
@@ -25,7 +25,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 | `windows package` | Windows x64 | 构建便携 zip，解压后转换，并驱动打包后的本机界面 |
 | `swift (macos-15)` | macOS arm64 | 编译 macOS 应用（正式版与 `CHAMO_DEBUG` 版）和 HEIC 辅助程序；运行 Swift 单测（`tests/*Tests.swift`） |
 | `ui (ubuntu-latest / windows-latest / macos-15)` | 三端 | 界面自动化：Playwright 驱动 `chamo ui` 真实页面（三端），macOS 上再用调试钩子剧本驱动原生应用；断言落到输出文件上，固定画面与基准截图比对。约定见 `uitests/README.md` |
-| `ops scripts` | Linux x64 | 自循环工具：隐私扫描、评审 API 客户端测试、shellcheck |
+| `ops scripts` | Linux x64 | CI 工具：隐私扫描、评审 API 客户端测试、shellcheck |
 | `all checks` | Linux x64 | 只有上面每个作业都成功才通过；任何一个被跳过或取消也算失败 |
 
 三个平台的引擎作业共用 `.github/actions/setup-engine`：Python 3.12、`third_party/requirements.lock` 锁定的依赖（带 pip 缓存）和真实的 LibreOffice。`test-matrix` 用的也是同一个环境。
@@ -54,7 +54,7 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 
    脚本会触发 `test-matrix`、等待结束、打印各平台汇总，退出码就是结论。`test-matrix.yml` 要先合并到 main 才能被手动触发；之后用 `--ref` 可以测任何分支。
 3. 开 PR 后看 `all checks` 与 `agent-review`。失败时用 `gh run view <id> --log-failed` 看日志，或用 `gh run download <id>` 下载 JUnit XML 与汇总。
-4. 令牌需要 Actions 读写权限才能触发运行（见 `ops/agent-loop/README.md`）。
+4. 令牌需要 Actions 读写权限才能触发运行。
 
 ## 5. 新功能必须补的测试
 
@@ -113,7 +113,13 @@ main 分支保护只需要两项必需检查：`all checks` 和 `agent-review`�
 python3 -m pip install -r third_party/requirements.lock
 python3 -m pytest tests -q -rs -x --junitxml=results.xml
 python3 scripts/ci_report.py --platform macos --skips tests/ci_allowed_skips.json results.xml
-python3 -m pytest ops/agent-loop -q
+python3 -m pytest scripts/ci -q
 ```
 
 Swift 的编译与单测命令见 `.github/workflows/cross-platform.yml` 的 `swift` 作业。
+
+## 11. 覆盖率目标与当前报告
+
+最终目标是100%单测行与分支覆盖率，不能因此删测、弱化断言或缩小统计范围。存量缺口需要记录并持续补齐；覆盖率本身不能保证功能正确，仍需以上真实转换、平台、界面与包体验证。
+
+当前工作区的覆盖率改造是报告阶段：`.coveragerc` 默认统计 Python 引擎，`fail_under = 0`；引擎作业运行的测试包含集成路径，因此不能称为全量单测覆盖率，也不包含 Swift、UI 和安装包作业。尚未建立全量100%门禁，不得宣称已达标。报告、实际门禁与最终目标必须分别说明。

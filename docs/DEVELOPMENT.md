@@ -1,5 +1,7 @@
 # 开发说明
 
+需求见 [提案目录](../proposals/README.md)，测试见 [CI_TESTING.md](CI_TESTING.md)，全部文档见 [文档目录](README.md)。
+
 ## 项目结构
 
 | 目录 | 内容 |
@@ -9,6 +11,14 @@
 | `scripts/` | 依赖下载、构建、打包与 CI 验收脚本 |
 | `tests/` | 引擎测试（pytest）与 Swift 单元测试 |
 | `assets/brand/` | Logo、图标与吉祥物的源文件和生成脚本 |
+| `proposals/` | 需求总目录、每项 PR 摘要、详细 PRD 与元数据 |
+| `docs/` | 使用、架构、开发流程、测试规则与版本队列 |
+| `scripts/ci/` | 隐私检查、独立评审与维护者审核工具 |
+| `.development/` | 私有持续开发规范与部署记录，Git 忽略 |
+| `uitests/` | 浏览器与原生界面的端到端测试及基准截图 |
+| `build/`、`dist/`、`release/` | 可再生构建产物、覆盖率与验证结果，不提交 |
+| `local/`、`research/`、`artifacts/` | 本地资料与工作记录，不提交；确认用途前不批量删除 |
+| `third_party/` | 本地运行时；只提交依赖清单和锁文件 |
 | `config/release.json` | 版本号、构建号与仓库地址 |
 
 macOS 应用、命令行和浏览器界面调用同一个引擎，规则只有一份。平台差异集中在 `engine/platform_*.py`，架构概览见 [ARCHITECTURE.md](ARCHITECTURE.md)。

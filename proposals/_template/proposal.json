@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "yyyymmdd-short-topic",
+  "title": "用可验证行为描述目标",
+  "feature_key": "stable-capability-key",
+  "status": "proposed",
+  "owner": "cloud-01",
+  "platforms": [
+    "linux",
+    "windows",
+    "macos"
+  ],
+  "write_scopes": [
+    "engine/example.py",
+    "tests/test_example.py"
+  ],
+  "dependencies": [],
+  "branch": "feat/yyyymmdd-short-topic",
+  "base_sha": "",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "description": "给定输入与环境，操作后结果符合明确断言且原件哈希不变",
+      "tests": []
+    }
+  ],
+  "coverage_gaps": [
+    "列出尚未覆盖的分支、平台、用户流程和后续补测计划"
+  ]
+}

@@ -33,7 +33,7 @@ import zipfile
 from pathlib import Path
 
 DEFAULT_KEYWORDS = Path.home() / ".config/chamo-agent/private-keywords.txt"
-DEFAULT_IDENTITY = "DeepSeek Harness <dsh@chamo.invalid>"
+DEFAULT_IDENTITY = "Chamo <dev@chamo.invalid>"
 ZERO = "0" * 40
 
 

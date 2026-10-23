@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "id": "20261023-development-workflow",
+  "title": "整理项目目录与 CI 工具",
+  "feature_key": "development-workflow",
+  "status": "proposed",
+  "owner": "local-mac-01",
+  "platforms": [
+    "linux",
+    "windows",
+    "macos"
+  ],
+  "write_scopes": [
+    "proposals",
+    "docs",
+    "scripts/ci",
+    "ops/agent-loop",
+    ".github",
+    "scripts/check_proposals.py",
+    "tests/test_proposals.py",
+    ".coveragerc",
+    ".gitignore",
+    "README.md"
+  ],
+  "dependencies": [],
+  "branch": "feat/project-structure",
+  "base_sha": "e5ee6fc68be465b540955f044a3cea8abbe95073",
+  "acceptance": [
+    {
+      "id": "AC-1",
+      "description": "私有迭代规范被Git忽略，公开项目不依赖私有文件",
+      "tests": [
+        ".gitignore"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "description": "需求目录可验证，CI工具引用有效",
+      "tests": [
+        "scripts/check_proposals.py",
+        "scripts/ci/test_privacy_scan.py",
+        "scripts/ci/test_review_llm.py"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "description": "迁移保留隐私扫描、独立评审与受保护路径检查",
+      "tests": [
+        ".github/workflows/agent-review.yml"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "description": "不改产品代码，旧部署资料已有私有备份",
+      "tests": []
+    }
+  ],
+  "coverage_gaps": [
+    "GitHub CI与独立Review需在推送后验证；本次没有产品功能变化"
+  ]
+}

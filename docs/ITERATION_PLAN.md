@@ -15,9 +15,9 @@
 4. **跨平台但不冒充。** macOS 原生应用 + Windows/Linux 的 CLI 与本机浏览器界面，共用 Python 引擎；界面、调度、引擎、平台适配分层，平台差异集中在 `engine/platform_*.py`。CLI 不得冒充完整 GUI。
 5. **不做无据重写。** 没有实测瓶颈和同口径原型对比，不把引擎改写成 Go/Rust 等其他语言。
 
-## 2. 给执行 Agent 的规则（每一轮都适用）
+## 2. 开发与验收规则
 
-### 2.1 一轮的完整闭环
+### 2.1 一次改动的完整闭环
 
 1. 从第 5 节取**最靠前的未完成版本**（或其中证据最充分、价值最高的一项），先核实事实：`git fetch`、看 PR/Release/CI、看工作区有没有别人的未提交改动。
 2. 写清楚：要解决的问题、证据、验收标准、不得回退的指标。
@@ -58,7 +58,7 @@
 | 代码 | `main` = `3f03e18`；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
 | 竞品 | `docs/COMPETITORS.md` 已入库：15 个产品、两张矩阵、每格标证据等级；**没有任何实测**，两处官方页面抓不到已标「待复核」，Kumquat 官网 404 未列入 |
 | 基准 | `scripts/bench_corpus.py`、`scripts/bench.py`、`scripts/bench_quality.py` 与 `tests/test_bench.py` 在 **PR #18**（三端 `test-matrix` 各 9/9 通过），合并前不作为基线引用 |
-| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、自循环工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
+| CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、CI 工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
 | 发布 | **尚无任何 Release**。旧的本地发布脚本已删除，需要 GitHub Actions 发布流程 |
 | 签名 | macOS ad-hoc，未做 Developer ID 签名与公证；Windows 未签名 |
 | 能力 | PDF 转图片（分片成本模型、页级续跑）、PDF 拆分/合并/压缩、Office/WPS 转 PDF/图片、图片合成 PDF、图片转换/压缩、RAG 严格预处理；CLI `chamo`、本机浏览器界面 `chamo ui` |

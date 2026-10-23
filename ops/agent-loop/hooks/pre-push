@@ -1,6 +1,0 @@
-#!/bin/sh
-# Used through the global core.hooksPath that container_init.sh points at the
-# rails folder, which is mounted read-only, so the agent cannot edit it from its
-# clone. Every push goes through the privacy scan; a missing keyword file
-# blocks the push.
-exec python3 "$(dirname "$0")/../privacy_scan.py" push "$@"

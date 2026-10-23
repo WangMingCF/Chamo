@@ -1,0 +1,26 @@
+# Reporting only: review uses observed lines/branches to add functional tests.
+# subprocess starts Python child measurement on Windows, macOS and Linux.
+# It does NOT guarantee flushing data on forced termination, os._exit or exec;
+# execv's separate patch is unavailable on Windows, so it is not enabled here.
+# Swift, browser/native UI, packaging and exhaustive state coverage are separate.
+[run]
+branch = True
+source = ${CHAMO_COVERAGE_SOURCE-engine}
+data_file = ${CHAMO_COVERAGE_DATA-build/coverage/.coverage}
+parallel = True
+relative_files = True
+patch = subprocess
+
+[report]
+show_missing = True
+precision = 2
+fail_under = 0
+
+[xml]
+output = build/coverage/coverage.xml
+
+[json]
+output = build/coverage/coverage.json
+
+[html]
+directory = build/coverage/html

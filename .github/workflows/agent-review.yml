@@ -10,7 +10,7 @@ name: agent-review
 #     checked out or executed: only its diff is read through the API.
 #   * The verdict is the commit status "agent-review" on the PR's head commit.
 #     The development token has no Commit statuses permission, so only this
-#     workflow (or the maintainer, via ops/agent-loop/approve_pr.sh) can set it.
+#     workflow (or the maintainer, via scripts/ci/approve_pr.sh) can set it.
 #   * Fork PRs are not reviewed: their text never reaches the model. They stay
 #     blocked until the maintainer looks at them.
 #   * Protected paths, oversized diffs and privacy hits are refused before any
@@ -56,7 +56,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number || inputs.pr }}
       CONTEXT: agent-review
-      PROTECTED: '^(ops/agent-loop/|\.github/|LICENSE|docs/LICENSES\.txt|engine/THIRD_PARTY_NOTICES\.md)'
+      PROTECTED: '^(ops/agent-loop/|scripts/ci/|\.github/|LICENSE|docs/LICENSES\.txt|engine/THIRD_PARTY_NOTICES\.md)'
       MAX_DIFF_BYTES: "400000"
     steps:
       - name: Check out the base branch (reviewer scripts only)
@@ -85,7 +85,7 @@ jobs:
             echo "agent-review: $1 — $2"
           }
           comment() { gh pr comment "$PR" -R "$GITHUB_REPOSITORY" -F "$1" > /dev/null; }
-          # A maintainer release of this exact commit (ops/agent-loop/approve_pr.sh)
+          # A maintainer release of this exact commit (scripts/ci/approve_pr.sh)
           # is final. A review run that finishes later must not overwrite it.
           released=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/statuses" \
             --jq '[.[] | select(.context == "agent-review" and .state == "success" and (.description | startswith("维护者")))] | length')
@@ -98,11 +98,11 @@ jobs:
             status error "未配置 PRIVACY_KEYWORDS，评审拒绝放行"; exit 1
           fi
           printf '%s\n' "$PRIVACY_KEYWORDS" > "$work/keywords.txt"
-          scan() { python3 ops/agent-loop/privacy_scan.py --keywords "$work/keywords.txt" text; }
+          scan() { python3 scripts/ci/privacy_scan.py --keywords "$work/keywords.txt" text; }
 
           gh pr diff "$PR" -R "$GITHUB_REPOSITORY" --name-only > "$work/files.txt" || { status error "无法读取改动文件"; exit 1; }
           if grep -Eq "$PROTECTED" "$work/files.txt"; then
-            { echo "这个 PR 改动了受保护路径（自循环规则、CI、许可证），自动评审不放行，需要维护者亲自审核；确认后由维护者运行 \`ops/agent-loop/approve_pr.sh $PR\`。"
+            { echo "这个 PR 改动了受保护路径（CI 工具、工作流、许可证），自动评审不放行，需要维护者亲自审核；确认后由维护者运行 \`scripts/ci/approve_pr.sh $PR\`。"
               echo; echo "受保护文件："; grep -E "$PROTECTED" "$work/files.txt" | sed 's/^/- /'; } > "$work/c.md"
             comment "$work/c.md"; status failure "改动受保护路径，需要维护者亲自审核"; exit 0
           fi
@@ -129,7 +129,7 @@ jobs:
           fi
 
           export PR_NUMBER="$PR" PR_SHA="$sha"
-          { python3 - ops/agent-loop/prompts/review.md <<'PY'
+          { python3 - scripts/ci/review.md <<'PY'
           import os, re, sys
           text = open(sys.argv[1], encoding="utf-8").read()
           print(re.sub(r"\{\{([A-Z_]+)\}\}", lambda m: os.environ.get(m.group(1), m.group(0)), text))
@@ -137,7 +137,7 @@ jobs:
             printf '\n\n## PR 标题与说明\n\n'; jq -r '.title + "\n\n" + (.body // "")' <<< "$pr_json"
             printf '\n\n## Diff\n\n```diff\n'; cat "$work/diff.patch"; printf '\n```\n'; } > "$work/prompt.md"
 
-          if ! python3 ops/agent-loop/review_llm.py < "$work/prompt.md" > "$work/review.md"; then
+          if ! python3 scripts/ci/review_llm.py < "$work/prompt.md" > "$work/review.md"; then
             status error "评审模型调用失败（检查 REVIEW_API_KEY / REVIEW_MODEL）"; exit 1
           fi
           verdict=$(grep -oE '^VERDICT: (APPROVE|REQUEST_CHANGES)[[:space:]]*$' "$work/review.md" | tail -1 | awk '{print $2}')

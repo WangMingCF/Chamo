@@ -128,7 +128,7 @@ jobs:
           echo "no build path found"
 
       - name: Privacy scan of the bundle's own text
-        # Hash-based scan (ops/agent-loop/privacy_scan.py) over what the project
+        # Hash-based scan (scripts/ci/privacy_scan.py) over what the project
         # wrote: plist, engine, documentation. Third-party binaries are skipped.
         env:
           PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
@@ -138,7 +138,7 @@ jobs:
             echo "::warning::PRIVACY_KEYWORDS not available here (fork or dry run); scan skipped"; exit 0
           fi
           printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
-          python3 ops/agent-loop/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" files \
+          python3 scripts/ci/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" files \
             "$INSTALLED_APP/Contents/Info.plist" "$INSTALLED_APP/Contents/Resources/engine" \
             "$INSTALLED_APP/Contents/Resources/Documentation"
 
@@ -259,7 +259,7 @@ jobs:
           # The packages' own text was scanned in their build jobs and in review;
           # here: asset names, the file lists inside them, and the notes.
           { ls release-assets; unzip -Z1 release-assets/*.zip; for d in release-assets/*.deb; do dpkg-deb -c "$d"; done; cat docs/RELEASE_NOTES.txt; } \
-            | python3 ops/agent-loop/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" text
+            | python3 scripts/ci/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" text
       - name: Create the draft
         env:
           GH_TOKEN: ${{ github.token }}
