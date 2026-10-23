@@ -98,10 +98,14 @@ def pages(spec,total):
     if not spec.strip(): return list(range(total))
     values=[]
     for part in spec.split(','):
-        nums=part.strip().split('-')
-        if len(nums)>2 or not all(x.strip().isdigit() for x in nums): raise ValueError('页码格式应为 1-5,8,12-20')
+        nums=[x.strip() for x in part.split('-')]
+        # isdecimal, not isdigit: isdigit also accepts superscripts and other
+        # numeric characters ("¹²³") that int() then refuses, so a pasted "¹"
+        # surfaced as "invalid literal for int()" instead of the format hint.
+        if len(nums)>2 or not all(x.isdecimal() for x in nums): raise ValueError('页码格式应为 1-5,8,12-20')
         a=int(nums[0]);b=int(nums[-1])
-        if not 1<=a<=b<=total: raise ValueError(f'页码超出范围 1–{total}')
+        if a>b: raise ValueError(f'页码起止颠倒：{a}-{b}，应为 {b}-{a}')
+        if a<1 or b>total: raise ValueError(f'页码超出范围 1–{total}')
         values.extend(range(a-1,b))
     if len(set(values))!=len(values): raise ValueError('页码范围重复')
     return values
