@@ -1789,6 +1789,14 @@ def validate(cfg):
     if not isinstance(cfg.get('margin_mm',10),int) or not 0<=cfg.get('margin_mm',10)<=50:raise ValueError('边距应为 0–50 mm')
     for key in ('image_bytes','document_bytes','text_bytes','table_bytes','table_rows'):
         if key in cfg and (not isinstance(cfg[key],int) or cfg[key]<=0):raise ValueError(key+' 必须大于零')
+    # timeout is the one numeric knob that was never checked. subprocess.run raises
+    # TimeoutExpired at once for timeout=0, and treats None as "wait forever", so a
+    # request carrying either turned every Office conversion into an internal error
+    # (or a run that can never end) instead of a message the caller can act on.
+    if 'timeout' in cfg:
+        value=cfg['timeout']
+        if isinstance(value,bool) or not isinstance(value,(int,float)) or not value>0:
+            raise ValueError('timeout 必须是大于 0 的秒数：0 会立刻超时，null 表示永不超时，二者都不是有效请求')
     if cfg.get('format','png') not in ['png','jpeg','tiff','bmp','webp']:raise ValueError('不支持的输出格式')
     if cfg.get('naming','tagged') not in ('clean','tagged'):raise ValueError('无效命名方式')
     if cfg.get('operation')=='pdf_compress':
