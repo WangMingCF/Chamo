@@ -167,29 +167,25 @@ struct FileTable: View {
             // and produced a horizontal scrollbar. The name column is the only one
             // that can absorb slack, so it gets the flexible range and the rest
             // keep their minimums.
-            // Measured on a 1024-point window: the sidebar and the inspector leave
-            // about 500 points for the table, and the earlier minimums (452 plus
-            // the row-number gutter) still produced a horizontal scrollbar and cut
-            // the last column off. 398 fits with room for the gutter; the name
-            // column takes the slack and keeps a tooltip with the full path.
-            // The table gets about 498 points at a 1024-point window (sidebar and
-            // inspector take the rest). Minimums alone were not enough: SwiftUI
-            // spreads the *ideal* widths first, so the ideal total (560) still
-            // overflowed and the last column was scrolled out of view. Capping the
-            // four narrow columns keeps the fixed part at 330 and leaves the rest
-            // to the name column, which truncates in the middle and has a tooltip.
+            // Measured on real 1024-point screenshots three times over. The sidebar
+            // and the inspector leave about 498 points for the table, and a column
+            // without a max grows into the space the next one needs: minimums alone
+            // (452) overflowed, then capped minimums with an unbounded name column
+            // still clipped the status column. Every column is capped now and the
+            // maxima sum to 484, so the whole header fits; the name column
+            // truncates in the middle and shows the full path in a tooltip.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
-                .width(min: 140, ideal: 200, max: .infinity)
+                .width(min: 120, ideal: 160, max: 200)
             TableColumn("页数", value: \.sortPages) { item in
                 Text(pagesText(item)).foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 44, ideal: 52, max: 60)
+            }.width(min: 44, ideal: 50, max: 56)
             TableColumn("大小", value: \.size) { item in
                 Text(item.size > 0 ? ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file) : "—").foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 52, ideal: 60, max: 70)
+            }.width(min: 52, ideal: 58, max: 64)
             TableColumn("结果", value: \.sortResult) { item in ResultCell(item: item, compare: m.operation.hasPrefix("image_") || m.operation == "pdf_compress") }
-                .width(min: 56, ideal: 70, max: 80)
+                .width(min: 52, ideal: 58, max: 64)
             TableColumn("状态") { item in StatusCell(item: item, reason: m.incompatibility(item)) }
-                .width(min: 96, ideal: 110, max: 120)
+                .width(min: 88, ideal: 94, max: 100)
         } rows: {
             // Merge tools follow list order, so rows can be dragged into place.
             // Rows carry their id (for merge reordering) and, once converted, the result
