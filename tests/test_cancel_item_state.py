@@ -222,3 +222,45 @@ def test_the_real_supervisor_and_withdraw_helpers_line_up():
     parameters = inspect.signature(workbench._committed_record).parameters
     assert "newer_than" in parameters, parameters
     assert callable(workbench._withdraw_product)
+
+
+def test_a_wrapped_cancellation_is_still_a_cancellation():
+    """pypdfium2 re-raises a callback exception as "argument 1: <type>: ...".
+
+    The browser UI on a 300-page PDF showed that shape on the item line: state
+    failed, text "argument 1: RunCancelled: 任务已取消…". The item line must say
+    已取消, and the raw wrapper must not leak into the user's report.
+    """
+    try:
+        try:
+            raise workbench.RunCancelled(CANCEL)
+        except Exception as inner:
+            raise TypeError("argument 1: " + str(inner)) from inner
+    except Exception as outer:
+        found = workbench.cancellation_cause(outer)
+        assert isinstance(found, workbench.RunCancelled), found
+        assert CANCEL in str(found)
+
+
+def test_an_ordinary_failure_is_not_mistaken_for_a_cancellation():
+    """The opposite error is just as bad: a real failure must not read 已取消."""
+    assert workbench.cancellation_cause(ValueError("boom")) is None
+    job = {"sources": ["a.pdf"], "output": "/tmp/chamo-cancel-gate"}
+    result = workbench.job_error_result(ValueError("boom"), job)
+    assert result["state"] == "failed", result
+    assert result["error"] == "boom", result
+
+
+def test_the_worker_result_for_a_wrapped_cancel_is_the_cancelled_state():
+    """Same chain the shard path caught: the result file must not say failed."""
+    job = {"sources": ["a.pdf"], "output": "/tmp/chamo-cancel-gate"}
+    try:
+        try:
+            raise workbench.RunCancelled(CANCEL)
+        except Exception as inner:
+            raise TypeError("argument 1: " + str(inner)) from inner
+    except Exception as outer:
+        result = workbench.job_error_result(outer, job)
+    assert result["state"] == "cancelled", result
+    assert result["error"] == CANCEL, result
+    assert result["outputs"] == [], result
