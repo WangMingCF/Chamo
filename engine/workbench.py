@@ -748,6 +748,11 @@ def render_sharded(path,work,cfg,stem,selected,shards,cache=None):
                     try:tail=platform_text.read_text(ctrl/f'child-{index}.log')[-800:]
                     except OSError:pass
                     raise ValueError(f'分片渲染进程异常退出（分片 {index+1}/{len(parts)}，退出码 {proc.returncode}）；该作业未完成，原件保留。'+tail)
+                if result.get('state')=='cancelled':
+                    # The shard reports a cancel as its own state now, so the parent
+                    # has to read it; before this, a cancelled shard was reported on
+                    # the item line as 失败 plus a raw wrapper message.
+                    raise RunCancelled(result.get('error') or '任务已取消，原件保留，可重新核验并恢复')
                 if result.get('state')!='ok':
                     raise ValueError(f'分片渲染失败（分片 {index+1}/{len(parts)}）：{result.get("error") or "未知错误"}；该作业未完成，原件保留')
             done=0
@@ -761,6 +766,8 @@ def render_sharded(path,work,cfg,stem,selected,shards,cache=None):
         files=[]
         for index,result_path in enumerate(results):
             result=_read_child_result(result_path)
+            if result and result.get('state')=='cancelled':
+                raise RunCancelled(result.get('error') or '任务已取消，原件保留，可重新核验并恢复')
             if not result or result.get('state')!='ok':
                 raise ValueError(f'分片渲染失败（分片 {index+1}/{len(parts)}）；该作业未完成，原件保留')
             files.extend(result.get('files') or [])
@@ -1946,6 +1953,32 @@ class RunCancelled(RuntimeError):
     """
 
 
+def cancellation_cause(error):
+    """The RunCancelled hiding in an exception chain, if there is one.
+
+    A cancel raised inside a third-party callback comes back wrapped - pypdfium2
+    reports it as "argument 1: RunCancelled: 任务已取消…" - so checking only
+    isinstance(error, RunCancelled) let a user cancel surface as 失败 with a raw
+    wrapper message on the item line (seen in the browser UI on a 300-page PDF).
+    The chain is walked because the wrapper keeps the original as __context__ or
+    __cause__.
+    """
+    seen=set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error,RunCancelled):return error
+        seen.add(id(error))
+        error=getattr(error,'__cause__',None) or getattr(error,'__context__',None)
+    return None
+
+
+def job_error_result(error,job):
+    """The result record for a job that raised: a cancellation is not a failure."""
+    wrapped=cancellation_cause(error)
+    if wrapped is not None:
+        return {'state':'cancelled','error':str(wrapped),'sources':job['sources'],'outputs':[]}
+    return {'state':'failed','error':str(error),'sources':job['sources'],'outputs':[]}
+
+
 class Supervisor:
     def __init__(self,req):
         self.req=req;self.lock=threading.RLock();self.children={};self.paused=False;self.cancelled=False;self.low=False
@@ -2256,11 +2289,11 @@ def main():
         # from a crash and fails the whole job, so never leave without writing one.
         result_path=spec_path.with_name(spec_path.stem+'.result.json')
         def shard_interrupted():
-            # Deliberately NOT RunCancelled: the parent process's handling of a
-            # shard result has not been verified, and a worker must not write a
-            # state its consumer was never taught to read. The sharded path still
-            # reports failed on cancel - tracked as follow-up work, not claimed.
-            raise RuntimeError('任务已取消，原件保留，可重新核验并恢复')
+            # RunCancelled, and the parent now reads the cancelled state the shard
+            # writes for it. This used to be a plain RuntimeError because that
+            # consumer side had never been verified, which is exactly how a
+            # cancelled shard ended up on the item line as 失败.
+            raise RunCancelled('任务已取消，原件保留，可重新核验并恢复')
         platform_process.on_terminate(shard_interrupted)
         try:
             # The parent has just written this file. On Windows an antivirus scan can
@@ -2278,12 +2311,16 @@ def main():
             result={'state':'ok','files':_expected_page_files(spec['stem'],selected,spec['config']),
                     'cache':cache_stats,'seconds':round(time.monotonic()-started,3)}
         except Exception as error:
-            # No special case for RunCancelled here on purpose: shard_interrupted
-            # still raises a plain RuntimeError (see above), so the shard path has
-            # no way to produce that state, and a worker must not write a state its
-            # consumer was never taught to read.
-            result={'state':'failed','files':[],'error':f'{type(error).__name__}: {error}',
-                    'seconds':round(time.monotonic()-started,3)}
+            # A cancellation can arrive wrapped (a callback inside pypdfium2 reports
+            # it as "argument 1: RunCancelled: …"), so look through the chain before
+            # calling this a failure. The parent reads the cancelled state.
+            wrapped=cancellation_cause(error)
+            if wrapped is not None:
+                result={'state':'cancelled','files':[],'error':str(wrapped),
+                        'seconds':round(time.monotonic()-started,3)}
+            else:
+                result={'state':'failed','files':[],'error':f'{type(error).__name__}: {error}',
+                        'seconds':round(time.monotonic()-started,3)}
         atomic_json(result_path,result,durable=False)
         return
     if a.chunk:
@@ -2300,7 +2337,7 @@ def main():
             job=entry['job']
             try:r=one(job)
             except RunCancelled as e:r={'state':'cancelled','error':str(e),'sources':job['sources'],'outputs':[]}
-            except Exception as e:r={'state':'failed','error':str(e),'sources':job['sources'],'outputs':[]}
+            except Exception as e:r=job_error_result(e,job)
             atomic_json(entry['result'],r,durable=False)
             tmp=Path(chunk['progress']+'.tmp');platform_text.write_text(tmp,json.dumps({'done':k+1,'total':total}));os.replace(tmp,chunk['progress'])
         return
@@ -2311,7 +2348,7 @@ def main():
         job=platform_text.read_json(Path(a.one))
         try:r=one(job)
         except RunCancelled as e:r={'state':'cancelled','error':str(e),'sources':job['sources'],'outputs':[]}
-        except Exception as e:r={'state':'failed','error':str(e),'sources':job['sources'],'outputs':[]}
+        except Exception as e:r=job_error_result(e,job)
         atomic_json(a.result,r,durable=False);return
     try:
         supervisor=Supervisor(platform_text.read_json(Path(a.request)))
