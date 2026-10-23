@@ -57,6 +57,38 @@ def truncate(name: str, max_bytes: int = NAME_MAX_BYTES) -> str:
     return "".join(out) + ext
 
 
+def reserve(stem: str, suffix: str, extra: int = 0) -> str:
+    """Shorten a stem so that `stem + suffix` (plus `extra` bytes) is one component.
+
+    Whatever the app appends - a page counter, a " (2)" collision marker - has to
+    be paid for out of the same 255 bytes the name already occupies.
+    """
+    room = NAME_MAX_BYTES - len(suffix.encode("utf-8")) - extra
+    if len(stem.encode("utf-8")) <= room:
+        return stem
+    kept, used = [], 0
+    for ch in stem:
+        size = len(ch.encode("utf-8"))
+        if used + size > room:
+            break
+        kept.append(ch)
+        used += size
+    return "".join(kept) or "_"
+
+
+def page_stem(stem: str) -> str:
+    """The stem for intermediate page files, shortened to leave room for the suffix.
+
+    A PDF may legally be named with 243 UTF-8 bytes (81 Chinese characters), yet
+    appending "_page00001.jpeg" reaches 258 bytes: rendering then failed with
+    ENAMETOOLONG before a single page was written, so the whole export died on a
+    file the filesystem had happily accepted. Truncate here, on a character
+    boundary, and keep every caller using this one function so the names the
+    renderer writes and the names the verifier expects cannot drift apart.
+    """
+    return reserve(stem, "_page00001.jpeg")
+
+
 def path_fits(relative) -> bool:
     """True when every component of a relative path fits the byte limit."""
     return all(len(part.encode("utf-8")) <= NAME_MAX_BYTES for part in relative.parts)

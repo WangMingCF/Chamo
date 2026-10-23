@@ -1,0 +1,54 @@
+"""Page file names must be creatable for every legal source name.
+
+A PDF called with 81 Chinese characters is 243 bytes and the filesystem accepts it,
+but the render names each page `<stem>_page00001.jpeg`, which reached 258 bytes and
+failed with ENAMETOOLONG: the export died on a file the user had every right to have.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
+import platform_names
+import workbench
+
+LONG = "讲" * 81          # 243 UTF-8 bytes, legal as a single component
+
+
+def test_expected_page_files_are_creatable_for_a_long_source_name(tmp_path):
+    for fmt in ("jpeg", "png"):
+        for name in workbench._expected_page_files(LONG, [0, 1], {"format": fmt}):
+            assert len(name.encode("utf-8")) <= platform_names.NAME_MAX_BYTES, name
+            (tmp_path / name).write_bytes(b"x")     # the filesystem must accept it
+
+
+def test_the_render_name_and_the_verifier_agree(tmp_path):
+    # render() builds the same name; if the two ever disagree the export reports a
+    # missing page for every page it just wrote.
+    expected = workbench._expected_page_files(LONG, [0], {"format": "jpeg"})[0]
+    produced = f"{platform_names.page_stem(LONG)}_page{0 + 1:05d}.jpeg"
+    assert produced == expected
+
+def test_a_collision_suffix_does_not_overflow_a_long_name(tmp_path):
+    # The retry name is built by appending " (2)", so a name already near the limit
+    # reached 257 bytes and unique_target raised OSError ENAMETOOLONG instead of
+    # producing the second file.
+    name = ("讲" * 80) + ".pdf"          # 244 bytes, legal on its own
+    (tmp_path / name).write_bytes(b"existing, different content")
+    target, adopted = workbench.unique_target(tmp_path, Path(name), "deadbeef", set())
+    assert not adopted, "different content must never be adopted"
+    assert len(target.name.encode("utf-8")) <= platform_names.NAME_MAX_BYTES, target.name
+    target.write_bytes(b"second")        # the filesystem must accept the retry name
+    assert (tmp_path / name).read_bytes() == b"existing, different content"
+
+def test_a_collision_suffix_does_not_overflow_a_long_folder_name(tmp_path):
+    # page_folder() appends " (2)" to a folder name that is already near the limit;
+    # exists() reports False for an over-long name, so the failure surfaced later as
+    # a raw ENAMETOOLONG from mkdir.
+    base = "讲" * 84                      # 252 bytes; " (2)" would make 256
+    (tmp_path / base).mkdir()
+    chosen = workbench.page_folder(tmp_path, Path(base) / "p_page1.png", set())
+    assert chosen != base
+    assert len(chosen.encode("utf-8")) <= platform_names.NAME_MAX_BYTES, chosen
+    (tmp_path / chosen).mkdir()           # the filesystem must accept it

@@ -64,3 +64,30 @@ def test_real_file_can_be_created_with_a_long_name(tmp_path):
     target = tmp_path / name
     target.write_bytes(b"x")
     assert target.exists()
+
+def test_page_stem_leaves_room_for_the_page_suffix():
+    # 81 Chinese characters are 243 bytes: a legal file name that the page suffix
+    # pushed to 258 bytes, so rendering died with ENAMETOOLONG before page one.
+    source = "讲" * 81
+    produced = names.page_stem(source) + "_page00001.jpeg"
+    assert len(produced.encode("utf-8")) <= names.NAME_MAX_BYTES
+
+
+def test_page_stem_keeps_short_names_untouched():
+    assert names.page_stem("normal") == "normal"
+    assert names.page_stem("讲义") == "讲义"
+
+
+def test_page_stem_never_splits_a_character():
+    result = names.page_stem("讲" * 81)
+    result.encode("utf-8").decode("utf-8")  # round-trips, so no partial character
+    assert result, "must not truncate to nothing"
+
+def test_reserve_pays_for_the_suffix_out_of_the_same_budget():
+    suffix, marker = ".pdf", " (2)"
+    stem = names.reserve("讲" * 81, suffix, len(marker))
+    assert len((stem + marker + suffix).encode("utf-8")) <= names.NAME_MAX_BYTES
+
+
+def test_reserve_leaves_a_short_name_alone():
+    assert names.reserve("report", ".pdf", 4) == "report"
