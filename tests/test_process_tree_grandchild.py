@@ -55,8 +55,15 @@ MODULE_DIR = Path(os.environ.get("CHAMO_PLATFORM_PROCESS_DIR") or ENGINE).resolv
 sys.path.insert(0, str(MODULE_DIR))
 import platform_process as pp  # noqa: E402
 
-# The grandchild writes an atomic counter AND its own PID. The PID is what makes
-# "terminated, not merely paused" observable.
+# The grandchild writes an append-only counter AND its own PID. The PID is what
+# makes "terminated, not merely paused" observable.
+#
+# The counter used to be temp-file + os.replace, described as "atomic". It was not,
+# from the reader's side: a read racing the truncate saw an empty file (0), and on
+# Windows a read landing inside os.replace found the target missing. That is the
+# same file-protocol defect tests/test_process_control.py had (fixed in e12c9d5 by
+# appending instead); this file kept the old protocol as known debt. Appending
+# removes the window rather than retrying around it.
 GRANDCHILD = """
 import os, sys, time
 counter_path = sys.argv[1]
@@ -65,17 +72,12 @@ try:
         handle.write(str(os.getpid()))
 except OSError:
     pass
-value = 0
-while True:
-    value += 1
-    tmp = counter_path + ".tmp"
-    try:
-        with open(tmp, "w") as handle:
-            handle.write(str(value))
-        os.replace(tmp, counter_path)
-    except OSError:
-        time.sleep(0.005)
-    time.sleep(0.02)
+with open(counter_path, "a", buffering=1) as handle:
+    value = 0
+    while True:
+        value += 1
+        handle.write(str(value) + chr(10))
+        time.sleep(0.02)
 """
 
 # The worker only starts the grandchild and stays alive: the only thing under
@@ -89,9 +91,21 @@ while True:
 
 
 def read(path: Path) -> int:
+    """The last finished value, or 0 before the grandchild has written one.
+
+    The counter appends one number per line and never truncates or renames, so the
+    last complete line is always readable - before, during and after a pause. A
+    trailing fragment (a write caught mid-line) is not a finished value and is
+    skipped rather than parsed.
+    """
     try:
-        return int(path.read_text().strip() or 0)
-    except (OSError, ValueError):
+        text = path.read_text()
+    except OSError:
+        return 0
+    lines = [line for line in text.split(chr(10))[:-1] if line.strip()]
+    try:
+        return int(lines[-1])
+    except (IndexError, ValueError):
         return 0
 
 
@@ -326,3 +340,47 @@ def test_windows_job_handles_do_not_accumulate(tmp_path):
     assert after - before <= 10, (
         "Job Object handles accumulated: %d -> %d over %d workers (a long batch "
         "would exhaust the process handle table)" % (before, after, spawns))
+
+def test_the_counter_reads_the_last_finished_value(tmp_path):
+    """A read must never mistake a half-written line for a value.
+
+    The counter is append-only. A reader can therefore catch a write mid-line; the
+    fragment is not a finished value and must be ignored, and an empty or missing
+    file reads 0. Under the old temp-file + os.replace protocol the equivalent
+    moment produced 0 *after* real values had been written, which looked like the
+    counter resetting and made the pause assertion flaky for a reason unrelated to
+    process control.
+    """
+    counter = tmp_path / "counter"
+    cases = [
+        ("", 0),
+        ("1\n", 1),
+        ("1\n2\n3\n", 3),
+        ("1\n2\n3\n4", 3),        # a write caught mid-line: 4 is not finished
+        ("45", 0),                  # nothing finished yet
+        ("1\n45", 1),
+    ]
+    for content, expected in cases:
+        counter.write_text(content, encoding="utf-8")
+        assert read(counter) == expected, (content, read(counter), expected)
+    counter.unlink()
+    assert read(counter) == 0, "a missing counter must read 0, not raise"
+
+
+def test_the_counter_keeps_its_value_when_the_writer_is_killed(tmp_path):
+    """Killing the writer must not lose the last value (the old rename could)."""
+    counter = tmp_path / "counter"
+    child = subprocess.Popen([sys.executable, "-u", "-c", GRANDCHILD, str(counter)])
+    try:
+        value = settled(counter, timeout=15, minimum=3)
+        assert value >= 3, "the counter never advanced: %r" % value
+        child.kill()
+        child.wait(timeout=10)
+        after = read(counter)
+        assert after >= value, (
+            "the counter lost its last value after the writer was killed: %d -> %d"
+            % (value, after))
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
