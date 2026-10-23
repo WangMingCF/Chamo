@@ -162,3 +162,19 @@ def test_cancel_leaves_the_output_folder_clean(work):
     leftovers = sorted(str(p.relative_to(work / "out")) for p in (work / "out").rglob("*"))
     assert leftovers == [], f"a cancelled run left files in the output folder: {leftovers}"
     assert sha(pdf) == before
+
+
+def test_an_empty_tool_page_does_not_crash(work):
+    """Entering a tool with nothing queued must not kill the app.
+
+    On macOS 27 the window aborted with "more Update Constraints in Window passes
+    than there are views" as soon as a tool page appeared - before any file was
+    added, with no resize and no conversion (Mac-DSH follow-up on
+    verify-narrow-window-20261023c). The CI runner's macOS does not reproduce it,
+    so this is a smoke guard rather than a pixel baseline: the assertion is that
+    the process was still alive and produced a snapshot at all.
+    """
+    out = run(work, "empty-tool", [{"tool": "pdf_images"}, {"sleep": 1},
+                                   {"snapshot": "empty-tool"}])
+    assert (out / "empty-tool.png").is_file(), \
+        "the app produced no snapshot for an empty tool page"
