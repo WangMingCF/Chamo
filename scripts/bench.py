@@ -313,7 +313,10 @@ def run_engine(inputs, out_dir: Path, operation: str, config: dict, timeout: int
 
 
 def run_command(argv, timeout: int, env=None) -> dict:
-    result = _run(argv, timeout=timeout, env=env)
+    # Default to the measured environment here rather than at the call site: the
+    # existing tests replace run_command with a two-argument stand-in, and a
+    # keyword the stand-in does not accept turns a passing suite into a TypeError.
+    result = _run(argv, timeout=timeout, env=env or child_environment())
     return {"seconds": result["seconds"], "timed_out": result["timed_out"],
             "rc": result["rc"], "stderr": result["stderr"].strip()[-800:],
             "output_bytes": 0, "outputs": 0}
@@ -397,8 +400,7 @@ def run_case(case: dict, corpus: Path, work: Path, reps: int, timeout: int,
     name = case["name"]
     record = {"name": name, "operation": case.get("operation"), "runs": []}
     if case.get("kind") == "command":
-        record["runs"] = [run_command(case["argv"], timeout, env=child_environment())
-                          for _ in range(reps)]
+        record["runs"] = [run_command(case["argv"], timeout) for _ in range(reps)]
         record.update(summarise(record["runs"]))
         # A timeout is a failure, not a pass without a number: run_command reports
         # rc=None when it gives up, so "rc not in (0, None)" would accept it. The
