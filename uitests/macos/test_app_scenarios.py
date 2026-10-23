@@ -200,9 +200,11 @@ def test_an_empty_tool_page_does_not_crash(work):
         "the app produced no snapshot with the inspector asked to open"
     base = summary(out, "empty-tool")
     assert base, "the scenario produced no summary"
-    # The starting state is whatever the saved settings say, so it is reported but
-    # not asserted; what must hold is that the control both opens and closes.
-    assert "inspector" in base, f"the summary does not report the panel: {base}"
+    # run() gives each scenario its own CHAMO_STATE_DIR/CHAMO_APP_SUPPORT, so the
+    # starting state is the app default, not a leftover from another test. Pinning it
+    # is what makes "the panel is there from the start" checkable instead of implied.
+    assert base["inspector"] is True, \
+        f"a tool page should start with the inspector open: {base['inspector']!r}"
     opened = summary(out, "inspector-open")
     assert opened["inspector"] is True, "the inspector did not open when asked"
     closed = summary(out, "inspector-closed")
