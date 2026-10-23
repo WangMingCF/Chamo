@@ -39,17 +39,27 @@ runs:
       # libreoffice-common ships /usr/bin/soffice and the real binary under
       # /usr/lib/libreoffice/program (libreoffice-core only has soffice.bin).
       run: |
-        # timeout(1) bounds each attempt so a hung mirror becomes a retryable
-        # failure instead of a job that sits here until the runner kills it.
-        # Overridable so a test can bound each attempt in seconds instead of
-        # waiting out the real 7-minute limit.
-        APT_TIMEOUT="${APT_TIMEOUT:-420}"
+        # Bound a *stalled* mirror, not the total time. A total-time cap is the
+        # wrong instrument: on 2026-10-23 the Azure mirror kept downloading (34
+        # packages in one attempt, 40 s for one file) and a 420 s cap killed work
+        # that was making progress, turning a slow run into a red job. apt's own
+        # inactivity timeouts abort only a connection that stops delivering, so
+        # slow-but-moving downloads finish while a wedged one is retried.
+        #
+        # Each layer is overridable so tests can exercise them in seconds.
+        APT_STALL="${APT_STALL:-30}"        # seconds without progress => abort that file
+        APT_RETRIES="${APT_RETRIES:-3}"     # apt retries each stalled file itself
+        APT_TIMEOUT="${APT_TIMEOUT:-1800}"  # last-resort total cap, under the job's 40 min
+        APT_OPTIONS=(-o "Acquire::http::Timeout=$APT_STALL"
+                     -o "Acquire::https::Timeout=$APT_STALL"
+                     -o "Acquire::Retries=$APT_RETRIES")
         for attempt in 1 2 3; do
-          if sudo timeout "$APT_TIMEOUT" apt-get update &&
-             sudo timeout "$APT_TIMEOUT" apt-get install -y libreoffice-core libreoffice-common libreoffice-impress libreoffice-writer fonts-noto-cjk; then
+          if sudo timeout "$APT_TIMEOUT" apt-get "${APT_OPTIONS[@]}" update &&
+             sudo timeout "$APT_TIMEOUT" apt-get "${APT_OPTIONS[@]}" install -y \
+               libreoffice-core libreoffice-common libreoffice-impress libreoffice-writer fonts-noto-cjk; then
             break
           fi
-          echo "::warning::apt attempt $attempt failed or timed out after ${APT_TIMEOUT}s; retrying in $((attempt * 20))s"
+          echo "::warning::apt attempt $attempt did not finish; retrying in $((attempt * 20))s"
           sudo timeout 120 dpkg --configure -a || true
           sleep $((attempt * 20))
         done

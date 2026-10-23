@@ -85,7 +85,8 @@ def run_step(tmp_path: Path, stub: str, installs_soffice: bool = True) -> subpro
         soffice.chmod(0o755)
     body = linux_step_body().replace("/usr/bin/soffice", str(soffice))
     environment = dict(os.environ, PATH=bin_dir.as_posix() + ":" + os.environ["PATH"],
-                       APT_TIMEOUT="2", LOG=str(tmp_path / "calls.log"))
+                       APT_TIMEOUT="10", APT_STALL="2", APT_RETRIES="1",
+                       LOG=str(tmp_path / "calls.log"))
     return subprocess.run(["bash", "-c", body], capture_output=True, text=True,
                           env=environment, timeout=120)
 
@@ -140,7 +141,10 @@ def test_three_failures_still_fail_the_step(tmp_path):
 def test_every_attempt_is_bounded_in_the_action_source():
     """A guard so the timeout cannot be dropped again without a failing test."""
     body = linux_step_body()
-    assert "APT_TIMEOUT" in body, "each Linux attempt must be bounded"
+    # The bound must be a STALL timeout, not a total-time cap: a total cap killed
+    # a slow-but-progressing download and turned it into a red job.
+    assert "Acquire::http::Timeout" in body, "apt needs an inactivity timeout"
+    assert "APT_STALL" in body and "APT_RETRIES" in body
     source = ACTION.read_text(encoding="utf-8")
     assert "WaitForExit" in source, "the Windows attempt must be bounded too"
     assert "BREW_TIMEOUT" in source, "the macOS attempt must be bounded too"
