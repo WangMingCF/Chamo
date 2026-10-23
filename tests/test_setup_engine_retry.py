@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
+import time
 import textwrap
 from pathlib import Path
 
@@ -61,7 +62,8 @@ def linux_step_body() -> str:
     return textwrap.dedent("\n".join(line[indent:] for line in body))
 
 
-def run_step(tmp_path: Path, stub: str, installs_soffice: bool = True) -> subprocess.CompletedProcess:
+def run_step(tmp_path: Path, stub: str, installs_soffice: bool = True,
+             extra_env: dict | None = None) -> subprocess.CompletedProcess:
     """Run the step body with apt-get, sudo and sleep replaced by scripted stubs."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -86,7 +88,9 @@ def run_step(tmp_path: Path, stub: str, installs_soffice: bool = True) -> subpro
     body = linux_step_body().replace("/usr/bin/soffice", str(soffice))
     environment = dict(os.environ, PATH=bin_dir.as_posix() + ":" + os.environ["PATH"],
                        APT_TIMEOUT="10", APT_STALL="2", APT_RETRIES="1",
+                       APT_BUDGET="30",
                        LOG=str(tmp_path / "calls.log"))
+    environment.update(extra_env or {})
     return subprocess.run(["bash", "-c", body], capture_output=True, text=True,
                           env=environment, timeout=120)
 
@@ -98,6 +102,7 @@ def attempts(tmp_path: Path) -> int:
     return len([line for line in log.read_text().splitlines() if line.strip()])
 
 
+NEWLINE = chr(10)
 HEADER = "#!/bin/sh\n"
 RECORD = 'echo "$*" >> "$LOG"\n'
 SUCCESS = HEADER + RECORD + "exit 0\n"
@@ -145,9 +150,37 @@ def test_every_attempt_is_bounded_in_the_action_source():
     # a slow-but-progressing download and turned it into a red job.
     assert "Acquire::http::Timeout" in body, "apt needs an inactivity timeout"
     assert "APT_STALL" in body and "APT_RETRIES" in body
+    # A per-attempt cap is not a bound on the step: three attempts plus backoff can
+    # far exceed the intended limit, and the engine/package jobs carry no
+    # timeout-minutes. A whole-step budget must exist and be enforced.
+    assert "APT_BUDGET" in body and "deadline" in body, "the step needs a total budget"
+    assert "budget of" in body, "an exhausted budget must be reported, not silently looped"
     source = ACTION.read_text(encoding="utf-8")
     assert "WaitForExit" in source, "the Windows attempt must be bounded too"
     assert "BREW_TIMEOUT" in source, "the macOS attempt must be bounded too"
+
+@LINUX_ONLY
+def test_an_exhausted_budget_stops_the_loop_instead_of_retrying_forever(tmp_path):
+    """The whole step must end near its budget, not after every attempt.
+
+    Per-attempt caps alone let a slow mirror run for attempt x cap x backoff, which
+    on the engine and package jobs (no timeout-minutes) can be over an hour. With a
+    budget the step gives up once the deadline passes.
+    """
+    # apt always fails; the sleep stub makes each call instant, so the only
+    # thing that can stretch the step is the retry backoff, which the budget cuts.
+    # A real 30 s call: without a budget each attempt gets APT_TIMEOUT (60 s) from
+    # the step, so three attempts would take 90 s. With a 1 s budget the first is
+    # cut at 1 s and the second is never started.
+    failing = (HEADER + RECORD + "exec /bin/sleep 30" + NEWLINE)
+    started = time.monotonic()
+    result = run_step(tmp_path, failing, installs_soffice=False,
+                      extra_env={"APT_BUDGET": "1", "APT_TIMEOUT": "60"})
+    elapsed = time.monotonic() - started
+    assert result.returncode != 0
+    # Without a budget this would run all three attempts plus 20/40/60 s backoff.
+    assert elapsed < 20, "the step ignored its budget: %.1fs" % elapsed
+    assert attempts(tmp_path) <= 3, attempts(tmp_path)
 
 
 def test_the_macos_attempt_does_not_require_gnu_timeout():

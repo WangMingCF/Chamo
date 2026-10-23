@@ -49,17 +49,31 @@ runs:
         # Each layer is overridable so tests can exercise them in seconds.
         APT_STALL="${APT_STALL:-30}"        # seconds without progress => abort that file
         APT_RETRIES="${APT_RETRIES:-3}"     # apt retries each stalled file itself
-        APT_TIMEOUT="${APT_TIMEOUT:-1800}"  # last-resort total cap, under the job's 40 min
+        APT_TIMEOUT="${APT_TIMEOUT:-600}"   # cap for ONE attempt
+        APT_BUDGET="${APT_BUDGET:-1500}"    # cap for the WHOLE step, retries included
         APT_OPTIONS=(-o "Acquire::http::Timeout=$APT_STALL"
                      -o "Acquire::https::Timeout=$APT_STALL"
                      -o "Acquire::Retries=$APT_RETRIES")
+        # A per-attempt cap alone is not a bound on the step: three attempts of
+        # 1800 s plus backoff is ~90 minutes, and the engine and package jobs
+        # carry no timeout-minutes (GitHub's default is 360), so a slow mirror
+        # could hold a runner for well over an hour. A deadline makes the total
+        # explicit; each attempt gets whatever is left of it.
+        deadline=$(( $(date -u +%s) + APT_BUDGET ))
+        remaining() { left=$(( deadline - $(date -u +%s) )); [ "$left" -gt 0 ] && echo "$left" || echo 0; }
         for attempt in 1 2 3; do
-          if sudo timeout "$APT_TIMEOUT" apt-get "${APT_OPTIONS[@]}" update &&
-             sudo timeout "$APT_TIMEOUT" apt-get "${APT_OPTIONS[@]}" install -y \
+          left=$(remaining)
+          if [ "$left" -eq 0 ]; then
+            echo "::warning::apt budget of ${APT_BUDGET}s is spent; not starting attempt $attempt"
+            break
+          fi
+          slice=$(( left < APT_TIMEOUT ? left : APT_TIMEOUT ))
+          if sudo timeout "$slice" apt-get "${APT_OPTIONS[@]}" update &&
+             sudo timeout "$(remaining)" apt-get "${APT_OPTIONS[@]}" install -y \
                libreoffice-core libreoffice-common libreoffice-impress libreoffice-writer fonts-noto-cjk; then
             break
           fi
-          echo "::warning::apt attempt $attempt did not finish; retrying in $((attempt * 20))s"
+          echo "::warning::apt attempt $attempt did not finish within ${slice}s; retrying in $((attempt * 20))s"
           sudo timeout 120 dpkg --configure -a || true
           sleep $((attempt * 20))
         done
