@@ -5,21 +5,6 @@ import Quartz
 struct ContentView: View {
     @EnvironmentObject var m: Workbench
 
-    // A tool page also carries the inspector, whose own 300-point minimum adds to this
-    // view's minimum: a flat 980 therefore asked the window for 1280, and the window grew
-    // past a 1024-point screen (1281x744 screenshots against a 1024x692 baseline). On
-    // macOS 27 that same layout fight is the suspected cause of "more Update Constraints
-    // in Window passes than there are views". Lowering the window's minimum while a tool
-    // page is open keeps the total at 980 with the panel open, and below it when the
-    // panel is closed - never above the width that has to fit.
-    //
-    // Route.tool carries the tool id, so this is a pattern match, not an equality test:
-    // writing `m.route == .tool` does not compile.
-    private var toolPageOpen: Bool {
-        if case .tool = m.route { return true }
-        return false
-    }
-
     var body: some View {
         NavigationSplitView {
             Sidebar().navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
@@ -30,7 +15,12 @@ struct ContentView: View {
             case .tool: WorkspaceView()
             }
         }
-        .frame(minWidth: toolPageOpen ? 680 : 980, minHeight: 640)
+        // Back to a flat minimum: the inspector is no longer a split-view column, so it
+        // no longer adds its own 300 points here (see WorkspaceView). The earlier 680
+        // variant assumed the crash was a total-width problem; Mac-DSH reproduced it at
+        // a 1024-point window, where 680 + 300 = 980 already fits, so that hypothesis is
+        // dead and the minimum stays as it was.
+        .frame(minWidth: 980, minHeight: 640)
         .sheet(isPresented: $m.showFeedback) { FeedbackView(model: m) }
         .sheet(isPresented: $m.showPalette) { CommandPalette() }
         .sheet(isPresented: $m.showShortcuts) { ShortcutsSheet() }

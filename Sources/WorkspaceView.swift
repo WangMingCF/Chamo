@@ -8,28 +8,47 @@ struct WorkspaceView: View {
     @State private var targeted = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            if m.items.isEmpty { DropZone(targeted: targeted) } else { FileTable() }
-            Divider()
-            ActionBar()
+        // The inspector is a plain sibling of the work area, not a NavigationSplitView
+        // inspector. [Root cause, verify-tool-inspector-constraint-20261023d]
+        //
+        // On macOS 27 the .inspector modifier aborts the app with "The window has been
+        // marked as needing another Update Constraints in Window pass, but it has
+        // already had more Update Constraints in Window passes than there are views in
+        // the window". Mac-DSH's crash stack (binary 37b32a96..., SIGABRT at a 1024x800
+        // window) goes SplitViewChildController.hostingView(_:didUpdateMinSize:maxSize:)
+        // -> NSHostingView.SizeConstraints.update(from:) -> _willUpdateConstraintsForSubtree
+        // -> enqueueLayoutInvalidation -> NSHostingView.beginTransaction. That is the
+        // split-view child reporting a new minimum size from inside the window's own
+        // constraint pass, which invalidates layout again - a loop. Adding or removing
+        // the inspector column (the toolbar toggle) is exactly what changes that
+        // minimum, and doing it while the window is being resized makes it recurse.
+        //
+        // Two earlier candidates treated it as a width problem: raising/lowering the
+        // window minimum (980 vs 680) did not help - the crash reproduces at 1024 with
+        // 680 + 300 = 980 already satisfied - and moving the inspector up to the
+        // NavigationSplitView made the panel stop rendering entirely. The recursion is
+        // not about the total width but about a child whose minimum size changes; so
+        // the column is no longer a split-view child. A fixed-width panel inside the
+        // detail column keeps the panel visible, keeps the toolbar toggle, and keeps
+        // the 300-point width the pixel baseline already expects (the baseline's
+        // table/panel boundary sits at x=723/724 on a 1024-wide window).
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                if m.items.isEmpty { DropZone(targeted: targeted) } else { FileTable() }
+                Divider()
+                ActionBar()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if m.showInspector {
+                Divider()
+                InspectorView()
+                    .frame(width: 300)
+                    .frame(maxHeight: .infinity)
+            }
         }
         .navigationTitle(m.tool.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
-        // The inspector belongs to the detail column. A previous candidate moved it up
-        // to the NavigationSplitView in ContentView and the panel then never rendered at
-        // all (Mac-DSH ac2/ac4 on c9c0d18: right side empty); that relocation is reverted.
-        //
-        // [Hypothesis: verify-tool-inspector-constraint-20261023d] What forces the window
-        // past a 1024-point screen is the *sum* of this column's minimum and the window's
-        // own minimum (980 + 300 = 1280), so the window's minimum is what is lowered while
-        // a tool page is open - see the note in ChamoApp.swift. This column's width is
-        // left exactly as it was: dropping the minimum here instead made the panel 15 pt
-        // wider, the table lost that space and grew a horizontal scrollbar (CI run
-        // 39908810307: pdf-images-ready changed 2.23% of pixels, allowed 0.50%).
-        .inspector(isPresented: $m.showInspector) {
-            InspectorView().inspectorColumnWidth(min: 300, ideal: 340, max: 440)
-        }
         .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
             guard !m.running else { return false }
             for p in providers { _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { Task { @MainActor in m.add([url]) } } } }
@@ -69,7 +88,7 @@ struct WorkspaceView: View {
                 .help("添加文件（⌘O），或直接拖入窗口").disabled(m.running)
         }
         ToolbarItem(placement: .primaryAction) {
-            Button { withAnimation { m.showInspector.toggle() } } label: { Label("设置面板", systemImage: "sidebar.trailing") }
+            Button { m.toggleInspector() } label: { Label("设置面板", systemImage: "sidebar.trailing") }
                 .help(m.showInspector ? "隐藏设置面板" : "显示设置面板")
         }
     }
