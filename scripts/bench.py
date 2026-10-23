@@ -94,16 +94,17 @@ def cases_for(suite: str) -> list:
                       "config": {"format": "png", "dpi": 150}, "quality": {"dpi": 150}})
     cases += [
         {"name": "image-convert.batch", "operation": "image_convert", "inputs": "images",
-         "config": {"format": "png"}, "quality": {"lossy": False}},
+         "config": {"format": "png"}},
         {"name": "image-compress.lossless", "operation": "image_compress",
-         "inputs": "images", "config": {"format": "png", "lossy": False},
-         "quality": {"lossy": False}},
+         "inputs": "images", "config": {"format": "png", "lossy": False}},
     ]
     if full:
+        # Whether a run may lose detail is decided by its config alone; a second
+        # "quality": {"lossy": ...} copy used to sit here and nothing read it, so
+        # editing that one would have changed nothing.
         cases.append({"name": "image-compress.jpeg", "operation": "image_compress",
                       "inputs": "images",
-                      "config": {"format": "jpeg", "lossy": True, "quality": 80},
-                      "quality": {"lossy": True}})
+                      "config": {"format": "jpeg", "lossy": True, "quality": 80}})
     cases.append({"name": "pdf-compress.lossless", "operation": "pdf_compress",
                   "input": "text.pdf", "config": {"lossy": False}, "quality": {}})
     if full:
@@ -535,7 +536,10 @@ def main(argv=None) -> int:
               "reps_reported": args.reps >= 3,
               "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "machine": machine_info(), "dependencies": dependency_versions(),
-              "environment": {"CHAMO_PAGE_CACHE": "0"},
+              # Derived from the same function the children get, so the report
+              # cannot claim a setting the child did not receive.
+              "environment": {key: value for key, value in child_environment().items()
+                              if key in ("CHAMO_PAGE_CACHE", "PYTHONIOENCODING")},
               "corpus": {"suite": manifest["suite"], "total_bytes": manifest["total_bytes"],
                          "manifest_sha256": sha256_text(json.dumps(manifest["files"],
                                                                    sort_keys=True))},
@@ -575,10 +579,15 @@ def main(argv=None) -> int:
                               encoding="utf-8")
         os.replace(temporary, target)
         print("report: %s" % args.json)
-    if not args.keep:
-        remove_tree(work)
-    else:
+    if args.keep:
         print("work directory: %s" % work)
+    elif failed:
+        # run_case already keeps the output of a failed case; deleting the whole
+        # work tree here would have thrown that evidence away and left only the
+        # truncated stderr in the report.
+        print("kept %s: %d case(s) failed" % (work, len(failed)))
+    else:
+        remove_tree(work)
     return 0 if not failed else 1
 
 

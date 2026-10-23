@@ -17,6 +17,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -172,7 +173,13 @@ def test_a_timed_out_run_really_ends_instead_of_hanging():
     script = ("import subprocess, sys, time; "
               "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
               "time.sleep(30)")
+    started = time.monotonic()
     result = bench._run([sys.executable, "-c", script], timeout=3)
+    elapsed = time.monotonic() - started
     assert result["timed_out"] is True
     assert result["rc"] is None
-    assert result["seconds"] == 3, result["seconds"]
+    # The reported seconds equal the timeout by construction, so asserting them
+    # proves nothing. The wall clock is what shows the call came back instead of
+    # waiting for the grandchild to finish (the test itself would otherwise only
+    # be bounded by the outer pytest timeout).
+    assert elapsed < 15, "the timeout path took %.1fs" % elapsed
