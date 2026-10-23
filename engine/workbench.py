@@ -877,6 +877,62 @@ def office_container_problem(path):
     if any(head.startswith(magic) for magic in _OFFICE_HEADS):return None
     return f'不是有效的 {suffix} 文件：文件内容不是 Office 文档（可能被改了扩展名或已损坏）'
 
+# Opt-in batch conversion (default off): one soffice call converts many files, which
+# spreads its 1.6-2.7 s start-up over the whole batch. Measured on 50 mixed documents
+# the engine's default 3-worker run took ~37 s and one call ~11 s. Nothing about a
+# source is trusted from the batch: every result is checked per input and anything
+# missing, empty or unreadable is left to the single-file path, which keeps the real
+# error, the per-file timeout and the cancel behaviour.
+BATCH_PDFS={}
+BATCH_DIR=None
+
+def office_batch_prepare(sources, cfg, size, cancelled=lambda:False):
+    """Convert sources in batches of `size`; remember the PDFs that came out valid."""
+    global BATCH_DIR
+    office_batch_clear()
+    try:
+        _office_batch_run(sources,cfg,size,cancelled)
+    except Exception:                       # noqa: BLE001 - batching is an optimisation; never fail a run
+        office_batch_clear()
+
+def _office_batch_run(sources, cfg, size, cancelled):
+    global BATCH_DIR
+    exe=Path(cfg['soffice']) if cfg.get('soffice') else None
+    if exe is None or not platform_office.runnable(exe):
+        discovered=platform_office.find(BASE)
+        if not discovered:return
+        exe=Path(discovered)
+    BATCH_DIR=Path(tempfile.mkdtemp(prefix='chamo-office-batch-'))
+    candidates=[]
+    seen=set()
+    for source in sources:
+        path=Path(source)
+        # A name clash (a.docx and a.pptx both want a.pdf) or a file that is not what
+        # its suffix says would corrupt or mislead a shared output folder.
+        if path.suffix.lower() not in OFFICE or office_container_problem(path) or path.stem.lower() in seen:continue
+        seen.add(path.stem.lower());candidates.append(path)
+    timeout=cfg.get('timeout',600)
+    for number,start in enumerate(range(0,len(candidates),size)):
+        if cancelled():return
+        chunk=candidates[start:start+size]
+        target=BATCH_DIR/f'out-{number}';target.mkdir()
+        try:
+            subprocess.run([str(exe),'-env:UserInstallation='+(BATCH_DIR/f'profile-{number}').as_uri(),'--headless','--nologo','--nodefault','--nofirststartwizard','--norestore','--convert-to','pdf','--outdir',str(target),*map(str,chunk)],capture_output=True,timeout=min(timeout*len(chunk),3600),env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
+        except (subprocess.TimeoutExpired,OSError):
+            continue                       # the whole chunk falls back to single-file conversion
+        for path in chunk:
+            pdf=target/(path.stem+'.pdf')
+            try:
+                if pdf.is_file() and pdf.stat().st_size>0 and len(reader(pdf).pages)>0:BATCH_PDFS[str(path)]=pdf
+            except Exception:                # noqa: BLE001 - an unreadable result is simply not used
+                pass
+
+def office_batch_clear():
+    global BATCH_DIR
+    BATCH_PDFS.clear()
+    if BATCH_DIR is not None:
+        shutil.rmtree(BATCH_DIR,ignore_errors=True);BATCH_DIR=None
+
 def office_pdf(path, work, cfg):
     problem=office_container_problem(path)
     if problem:raise ValueError(problem)
@@ -889,8 +945,11 @@ def office_pdf(path, work, cfg):
         if not discovered:raise ValueError('缺少 Office 渲染引擎：未找到可执行的 LibreOffice')
         exe=Path(discovered)
     target=work/'office';target.mkdir()
-    env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'}
     pdf=target/(path.stem+'.pdf')
+    batched=BATCH_PDFS.get(str(path))
+    if batched is not None and batched.is_file():
+        shutil.copy2(batched,pdf);reader(pdf);return pdf
+    env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'}
     # A warm profile saves 1–2 s of first-start setup per document. Profiles are
     # per worker slot, so concurrent LibreOffice processes never share one; a
     # failure with a reused profile is retried once with a throwaway profile.
@@ -1549,6 +1608,7 @@ def _publish_file(source, target, out, created):
 
 def one(job):
     global THREADS,OFFICE_PROFILE,PROGRESS,COMPRESS_INFO
+    if job.get('office_batch_pdf'):BATCH_PDFS[str(Path(job['sources'][0]))]=Path(job['office_batch_pdf'])
     THREADS=max(1,min(8,int(job.get('threads',1))));OFFICE_PROFILE=job.get('office_profile');PROGRESS=job.get('progress')
     # Test-only cap so a cancel-latency gate can simulate a low-core CI runner on a
     # many-core machine (the page-encode pool size is derived from the CPU count).
@@ -2209,10 +2269,15 @@ class Supervisor:
         # Spare cores go to page encoding when there are fewer jobs than cores.
         self.threads=max(1,min(8,(os.cpu_count() or 4)//workers))
         self.profiles=Path(req.get('office_profile_root') or platform_state.office_profiles(req))
+        batch_size=int(cfg.get('office_batch') or os.environ.get('CHAMO_OFFICE_BATCH') or 0)
+        if cfg['operation']=='office_pdf' and batch_size>1:
+            office_batch_prepare([j['sources'][0] for j in jobs],cfg,batch_size,lambda:self.cancelled)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 units=[{**j,'config':cfg,'output':str(out),'shard_budget':shard_plan[index],
-                        'state_root':req.get('state_root'),'record_dir':str(record)}
+                        'state_root':req.get('state_root'),'record_dir':str(record),
+                        # Each unit runs in its own child process, so the batch result has to travel in the unit.
+                        **({'office_batch_pdf':str(BATCH_PDFS[str(Path(j['sources'][0]))])} if str(Path(j['sources'][0])) in BATCH_PDFS else {})}
                        for index,j in enumerate(jobs)]
                 futures=[pool.submit(self.execute,unit,record) for unit in plan_units(units,workers)]
                 for future in futures:future.result()
@@ -2306,6 +2371,7 @@ class Supervisor:
             self.cancelled=True
             return summary
         finally:
+            office_batch_clear()
             # A worker can die (or its cancel handler can interrupt the cleanup)
             # between "staging directory created" and "staging directory removed".
             # Remove only the directories this run registered - never a concurrent
