@@ -1325,8 +1325,17 @@ def unique_target(dest, relative, expected, taken):
 
 def page_folder(dest, relative, files_dir_taken):
     """A new folder for multi-page output: 讲义, 讲义 (2), … never mixing with older runs."""
+    base=relative.parts[0]
     for n in range(1,10000):
-        name=relative.parts[0] if n==1 else f'{relative.parts[0]} ({n})'
+        if n==1:
+            name=base
+        else:
+            # Same budget as unique_target: the " (2)" marker is appended, so a
+            # folder name already at the byte limit must give it room. Checking
+            # exists() on an over-long name returns False and hides the problem
+            # until mkdir fails.
+            marker=f' ({n})'
+            name=platform_names.reserve(base,'',len(marker))+marker
         if name in files_dir_taken or not (dest/name).exists():return name
     raise ValueError('输出目录中同名文件夹过多，请选择新的输出目录')
 

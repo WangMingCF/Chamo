@@ -41,3 +41,14 @@ def test_a_collision_suffix_does_not_overflow_a_long_name(tmp_path):
     assert len(target.name.encode("utf-8")) <= platform_names.NAME_MAX_BYTES, target.name
     target.write_bytes(b"second")        # the filesystem must accept the retry name
     assert (tmp_path / name).read_bytes() == b"existing, different content"
+
+def test_a_collision_suffix_does_not_overflow_a_long_folder_name(tmp_path):
+    # page_folder() appends " (2)" to a folder name that is already near the limit;
+    # exists() reports False for an over-long name, so the failure surfaced later as
+    # a raw ENAMETOOLONG from mkdir.
+    base = "讲" * 84                      # 252 bytes; " (2)" would make 256
+    (tmp_path / base).mkdir()
+    chosen = workbench.page_folder(tmp_path, Path(base) / "p_page1.png", set())
+    assert chosen != base
+    assert len(chosen.encode("utf-8")) <= platform_names.NAME_MAX_BYTES, chosen
+    (tmp_path / chosen).mkdir()           # the filesystem must accept it
