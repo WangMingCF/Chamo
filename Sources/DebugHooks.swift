@@ -176,6 +176,46 @@ import Quartz
         if let look = s["appearance"] as? String {
             NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua); next(0.8); return
         }
+        // A known content size, because the runner's window is whatever the display
+        // allows: the narrow-window checks are about what the layout does at 1024
+        // points, not about the runner's default.
+        if s["resize"] != nil {
+            let size = s["resize"] as? [String: Any]
+            let width = (size?["width"] as? NSNumber)?.doubleValue
+            let height = (size?["height"] as? NSNumber)?.doubleValue
+            guard let width, let height, width >= 320, height >= 240 else {
+                // A malformed resize must be an error, not a silent skip: the next
+                // screenshot would then be taken at the runner's default size and
+                // compared against a 1024 baseline, and nobody would know why.
+                finish(dir, ok: false, step: i, error: "resize needs width and height >= 320x240")
+                return
+            }
+            // The document window, never a panel: a status-bar panel, the palette or a
+            // sheet is also in NSApp.windows and also visible, and keyWindow can be one
+            // of them. Resizing the wrong window would leave the test looking at the
+            // runner's default size while claiming 1024.
+            guard let window = NSApp.mainWindow
+                    ?? NSApp.windows.first(where: { $0.contentView != nil && $0.canBecomeMain && $0.isVisible }) else {
+                finish(dir, ok: false, step: i, error: "resize: no main window to resize")
+                return
+            }
+            // Resize outside the current runloop turn. Doing it inline put the size
+            // change inside SwiftUI's own update cycle and a real Mac aborted with
+            // "The window has been marked as needing another Update Constraints in
+            // Window pass, but it has already had more Update Constraints in Window
+            // passes than there are views in the window" (verify-narrow-window-
+            // 20261023c, SIGABRT, no screenshot produced). Deferring past the turn
+            // and skipping a resize that would not change anything keeps the layout
+            // pass count bounded. The wait afterwards is longer than the delay so the
+            // next step cannot race the resize.
+            let target = NSSize(width: width, height: height)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                if window.contentLayoutRect.size != target {
+                    window.setContentSize(target)
+                }
+            }
+            next(1.0); return
+        }
         if s["start"] != nil { m.start(); next(0.2); return }
         if s["cancel"] != nil { m.command("cancel"); next(0.2); return }
         if s["retry"] != nil { m.retryFailed(); next(0.2); return }

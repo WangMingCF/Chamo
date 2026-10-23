@@ -114,6 +114,36 @@ def test_pdf_to_images_end_to_end(work):
     visual.compare(out / "ready.png", "pdf-images-ready")
 
 
+def test_the_window_at_1024_keeps_every_column_readable(work):
+    """At 1024 points wide (the runner's width) no column is cut off.
+
+    What this proves: no horizontal scrollbar at 1024 and the "大小" column shown in
+    full. The sample file name is long on purpose - a short one would fit even with
+    a squeezed name column, and the point is that a real document name still leaves
+    room for the size column. "状态" shows the queued label; "结果" is empty because
+    the run is not started, so a long result text is not exercised (see the PR's
+    未验证 section).
+    """
+    pdf = make_pdf(work / "in" / "2024年度第三季度财务报表与附录完整版-最终确认稿.pdf", 3)
+    out = run(work, "narrow", [
+        {"tool": "pdf_images"}, {"output": str(work / "out")},
+        {"set": {"format": "png", "dpi": 150}},
+        {"add": [str(pdf)]},
+        # 1024 is the width the check is about. The requested 700 points of height
+        # are clamped to 692 by the runner's screen (menu bar + Dock), so the
+        # captured content view is 1024x692; the height has no bearing on the
+        # column check and the baseline is recorded at the clamped size.
+        {"resize": {"width": 1024, "height": 700}},
+        # The "已添加" toast fades out after a few seconds; a baseline that
+        # contains it would differ between runs (uitests/README.md says so).
+        {"sleep": 5}, {"snapshot": "narrow-window"}])
+    shot = out / "narrow-window.png"
+    assert shot.is_file(), "the scenario produced no screenshot"
+    # The baseline folder already carries the platform; the name stays unprefixed
+    # like the other scenarios (home-light, pdf-images-ready).
+    visual.compare(shot, "narrow-window")
+
+
 def test_a_broken_file_fails_alone_and_says_why(work):
     good = make_pdf(work / "in" / "good.pdf", 1)
     bad = work / "in" / "broken.pdf"
