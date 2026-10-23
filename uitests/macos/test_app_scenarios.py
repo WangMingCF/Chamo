@@ -120,9 +120,9 @@ def test_the_window_at_1024_keeps_every_column_readable(work):
     What this proves: no horizontal scrollbar at 1024 and the "大小" column shown in
     full. The sample file name is long on purpose - a short one would fit even with
     a squeezed name column, and the point is that a real document name still leaves
-    room for the size column. Not covered: the "结果"/"状态" columns are empty here
-    because the run is not started, so their truncation with long values is not
-    exercised (see the PR's 未验证 section).
+    room for the size column. "状态" shows the queued label; "结果" is empty because
+    the run is not started, so a long result text is not exercised (see the PR's
+    未验证 section).
     """
     pdf = make_pdf(work / "in" / "2024年度第三季度财务报表与附录完整版-最终确认稿.pdf", 3)
     out = run(work, "narrow", [
@@ -130,7 +130,9 @@ def test_the_window_at_1024_keeps_every_column_readable(work):
         {"set": {"format": "png", "dpi": 150}},
         {"add": [str(pdf)]},
         {"resize": {"width": 1024, "height": 700}},
-        {"sleep": 1}, {"snapshot": "narrow-window"}])
+        # The "已添加" toast fades out after a few seconds; a baseline that
+        # contains it would differ between runs (uitests/README.md says so).
+        {"sleep": 5}, {"snapshot": "narrow-window"}])
     shot = out / "narrow-window.png"
     assert shot.is_file(), "the scenario produced no screenshot"
     # The baseline folder already carries the platform; the name stays unprefixed
