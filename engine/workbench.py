@@ -494,7 +494,7 @@ def render(path, work, cfg, stem, selected=None, cache=None):
                 cache['unavailable']=cache.get('unavailable',0)+1
             return cost
         for n in selected:
-            dest=work/f'{stem}_page{n+1:05d}.{ext}'
+            dest=work/f'{platform_names.page_stem(stem)}_page{n+1:05d}.{ext}'
             # Only a page whose sidecar and bytes both verify is reused; anything
             # missing, stale or corrupt falls through to a normal render, which
             # then replaces the bad cache entry.
@@ -655,6 +655,9 @@ def shard_budgets(operation,requested,jobs):
 
 def _expected_page_files(stem,selected,cfg):
     ext=cfg.get('format','png');ext=ext if ext in ['png','jpeg'] else 'png'
+    # Same shortening as render(): a 243-byte source name plus the page suffix
+    # exceeds NAME_MAX, and the two sides must keep agreeing on the file names.
+    stem=platform_names.page_stem(stem)
     return [f'{stem}_page{n+1:05d}.{ext}' for n in selected]
 
 def _read_json_file(path):
@@ -1235,7 +1238,8 @@ def compress_lossy(source,work,cfg,r):
     # engine test surface) still gets the documented 150 dpi / JPEG 75 resample.
     render_cfg={**cfg,'format':'jpeg','dpi':cfg.get('dpi',150),'quality':cfg.get('quality',75)}
     render(source,page_dir,render_cfg,source.name)
-    images=[page_dir/f'{source.name}_page{index+1:05d}.jpeg' for index in range(len(sizes))]
+    images=[page_dir/f'{platform_names.page_stem(source.name)}_page{index+1:05d}.jpeg'
+            for index in range(len(sizes))]
     if any(not image.is_file() for image in images):raise ValueError('有损渲染缺少页面文件，已保留原件')
     # img2pdf builds the whole PDF in memory; bound what one job may allocate.
     buffer_bytes=sum(image.stat().st_size for image in images)
