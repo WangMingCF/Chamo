@@ -16,15 +16,20 @@ struct WorkspaceView: View {
         .navigationTitle(m.tool.title)
         .navigationSubtitle(subtitle)
         .toolbar { toolbar }
-        // The inspector is attached one level up, to the NavigationSplitView in
-        // ContentView. [Hypothesis, not yet confirmed: verify-tool-inspector-
-        // constraint-20261023] Mounting it on the detail column here is believed to
-        // make macOS abort with "more Update Constraints in Window passes than
-        // there are views" the moment a tool page appears (even with no files, no
-        // resize and no conversion), because the split view and the detail would
-        // then both own the inspector's width constraints. The abort reproduces only
-        // on macOS 27, not on this repo's CI runners, so the cause stays a
-        // hypothesis until the Mac request reports back.
+        // [Hypothesis: verify-tool-inspector-constraint-20261023b] The abort ("more
+        // Update Constraints in Window passes than there are views") and the 1281-point
+        // window both came from declaring a *minimum* inspector width: that minimum adds
+        // to the window's own 980-point minimum, and the two fight while the split view
+        // settles. ideal/max keep the column the same size in practice without forcing
+        // the window, so no minimum is declared here.
+        //
+        // The previous candidate moved this inspector up to the NavigationSplitView;
+        // Mac-DSH's run on c9c0d18 showed the panel then never appeared at all (ac2/ac4
+        // screenshots: right side empty), i.e. the crash "fix" removed the feature. That
+        // relocation is reverted.
+        .inspector(isPresented: $m.showInspector) {
+            InspectorView().inspectorColumnWidth(ideal: 340, max: 440)
+        }
         .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in
             guard !m.running else { return false }
             for p in providers { _ = p.loadObject(ofClass: URL.self) { url, _ in if let url { Task { @MainActor in m.add([url]) } } } }

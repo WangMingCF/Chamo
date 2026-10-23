@@ -165,7 +165,7 @@ def test_cancel_leaves_the_output_folder_clean(work):
 
 
 def test_an_empty_tool_page_does_not_crash(work):
-    """Entering a tool with nothing queued must not kill the app.
+    """Entering a tool with nothing queued must not kill the app, panel included.
 
     On macOS 27 the window aborted with "more Update Constraints in Window passes
     than there are views" as soon as a tool page appeared - before any file was
@@ -174,11 +174,13 @@ def test_an_empty_tool_page_does_not_crash(work):
     so this is a smoke guard rather than a pixel baseline: the assertion is that
     the process was still alive and produced a snapshot at all.
 
-    What it can and cannot prove: on macOS 15 it passes whether or not the
-    inspector change is what fixes the abort, because the abort never happens
-    there. The real verdict comes from the macOS 27 request
-    verify-tool-inspector-constraint-20261023; if the CI matrix ever gains a
-    runner that reproduces the abort, this case becomes a true regression test.
+    The inspector is toggled here as well, because a candidate once "fixed" the
+    abort by moving the inspector out of the detail column - which made the panel
+    stop appearing altogether (Mac-DSH ac2/ac4 on c9c0d18). A crash-free window
+    with the panel missing is not a fix, so the summary must report the panel
+    actually opened. On macOS 15 the abort itself still cannot be reproduced; the
+    real verdict on the crash comes from the macOS 27 request
+    verify-tool-inspector-constraint-20261023b.
     """
     out = run(work, "empty-tool", [{"tool": "pdf_images"}, {"sleep": 1},
                                    {"snapshot": "empty-tool"},
@@ -186,7 +188,22 @@ def test_an_empty_tool_page_does_not_crash(work):
                                    # for it is also the liveness proof: the harness only
                                    # writes the file after answering the last step, so a
                                    # process that died after the snapshot leaves no summary.
-                                   {"summary": "empty-tool"}])
+                                   {"summary": "empty-tool"},
+                                   {"inspector": True}, {"sleep": 0.6},
+                                   {"snapshot": "empty-tool-inspector"},
+                                   {"summary": "inspector-open"},
+                                   {"inspector": False}, {"sleep": 0.6},
+                                   {"summary": "inspector-closed"}])
     assert (out / "empty-tool.png").is_file(), \
         "the app produced no snapshot for an empty tool page"
-    assert summary(out, "empty-tool"), "the scenario produced no summary"
+    assert (out / "empty-tool-inspector.png").is_file(), \
+        "the app produced no snapshot with the inspector asked to open"
+    base = summary(out, "empty-tool")
+    assert base, "the scenario produced no summary"
+    # The starting state is whatever the saved settings say, so it is reported but
+    # not asserted; what must hold is that the control both opens and closes.
+    assert "inspector" in base, f"the summary does not report the panel: {base}"
+    opened = summary(out, "inspector-open")
+    assert opened["inspector"] is True, "the inspector did not open when asked"
+    closed = summary(out, "inspector-closed")
+    assert closed["inspector"] is False, "the inspector did not close when asked"

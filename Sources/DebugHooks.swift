@@ -173,6 +173,11 @@ import Quartz
         if let paths = s["add"] as? [String] { m.add(paths.map { URL(fileURLWithPath: $0) }); next(1.0); return }
         if let output = s["output"] as? String { m.output = output; next(0.2); return }
         if let set = s["set"] as? [String: Any] { apply(m, set); next(0.3); return }
+        // The inspector is a user-facing control (the toolbar button "设置面板"), so a
+        // scenario has to be able to press it: acceptance asks whether it opens and
+        // closes and whether the tool page survives that. Its state is echoed in the
+        // summary, so a run reports what it saw instead of only an exit code.
+        if let want = s["inspector"] as? Bool { m.showInspector = want; next(0.6); return }
         if let look = s["appearance"] as? String {
             NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua); next(0.8); return
         }
@@ -243,6 +248,7 @@ extension Workbench {
         let payload: [String: Any] = ["tool": operation, "route": String(describing: route),
                                       "phase": String(describing: phase), "running": running,
                                       "notice": notice, "report": report, "output": targetOutput,
+                                      "inspector": showInspector,
                                       "items": items, "histories": histories]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
         return String(data: data, encoding: .utf8) ?? "{}"

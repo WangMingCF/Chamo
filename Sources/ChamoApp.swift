@@ -5,13 +5,6 @@ import Quartz
 struct ContentView: View {
     @EnvironmentObject var m: Workbench
 
-    // Route.tool carries the tool id, so this is a pattern match, not equality:
-    // writing `m.route == .tool` does not compile because the case has a value.
-    private var toolInspectorOpen: Bool {
-        if case .tool = m.route { return m.showInspector }
-        return false
-    }
-
     var body: some View {
         NavigationSplitView {
             Sidebar().navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
@@ -22,20 +15,7 @@ struct ContentView: View {
             case .tool: WorkspaceView()
             }
         }
-        // An inspector attached to the split view adds its own 300-point minimum
-        // to the window's, so keeping 980 while it was open demanded 1280 and the
-        // window grew past a 1024-point screen (observed as 1281x744 screenshots
-        // against a 1024x692 baseline). The two minimums trade off so the total
-        // stays 980 whether or not the inspector is showing.
-        .frame(minWidth: toolInspectorOpen ? 680 : 980, minHeight: 640)
-        // Owned by the split view, not by the detail column: see the note in
-        // WorkspaceView. Only the tool route has an inspector, so isPresented is
-        // gated on the route. Route.tool carries the tool id, so this is a pattern
-        // match rather than an equality test.
-        .inspector(isPresented: Binding(get: { toolInspectorOpen },
-                                        set: { m.showInspector = $0 })) {
-            InspectorView().inspectorColumnWidth(min: 300, ideal: 340, max: 440)
-        }
+        .frame(minWidth: 980, minHeight: 640)
         .sheet(isPresented: $m.showFeedback) { FeedbackView(model: m) }
         .sheet(isPresented: $m.showPalette) { CommandPalette() }
         .sheet(isPresented: $m.showShortcuts) { ShortcutsSheet() }
