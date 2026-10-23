@@ -182,7 +182,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libreoffice-core libreoffice-impress libreoffice-writer fonts-noto-cjk
           bash scripts/verify_deb.sh
-      - name: Scan installed Linux project files
+      - name: Scan exact Linux package payload
         env:
           PRIVACY_KEYWORDS: ${{ secrets.PRIVACY_KEYWORDS }}
         run: |
@@ -192,8 +192,11 @@ jobs:
           fi
           printf '%s\n' "$PRIVACY_KEYWORDS" > "$RUNNER_TEMP/kw.txt"
           dpkg-deb -e dist/chamo-cli_*.deb "$RUNNER_TEMP/package-control"
+          dpkg-deb -x dist/chamo-cli_*.deb "$RUNNER_TEMP/package-data"
           python scripts/ci/privacy_scan.py --keywords "$RUNNER_TEMP/kw.txt" files \
-            /opt/chamo/engine /usr/share/doc/chamo-cli /usr/bin/chamo "$RUNNER_TEMP/package-control"
+            "$RUNNER_TEMP/package-data/opt/chamo/engine" \
+            "$RUNNER_TEMP/package-data/usr/share/doc/chamo-cli" \
+            "$RUNNER_TEMP/package-data/usr/bin/chamo" "$RUNNER_TEMP/package-control"
 
       - uses: actions/upload-artifact@v4
         with:

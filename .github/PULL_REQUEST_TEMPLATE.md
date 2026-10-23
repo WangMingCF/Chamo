@@ -1,5 +1,5 @@
 - 需求：`proposals/<id>/PRD.md`
-- 实现执行端：NAS-DSH / Mac-DSH / Mac-Codex
+- 实现执行端：NAS-DSH / Mac-DSH / Mac-Claude
 - 问题、变更和影响范围：
 - 已检查已有任务、依赖和修改范围：
 

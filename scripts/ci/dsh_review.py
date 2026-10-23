@@ -88,8 +88,11 @@ def main():
                         ('Chamo', 'dev@chamo.invalid')}:
                     raise ValueError('unapproved commit identity')
         # Scan before publishing any report. Never execute PR source with this token.
-        published = '\n'.join([pr['title'], pr['body'] or '',
-                               gh('pr', 'diff', str(number), '-R', repo),
+        patch = gh('pr', 'diff', str(number), '-R', repo)
+        # Removed text/context is already public; allow repairs that remove it.
+        additions = '\n'.join(line[1:] for line in patch.splitlines()
+                              if line.startswith('+') and not line.startswith('+++'))
+        published = '\n'.join([pr['title'], pr['body'] or '', *files, additions,
                                *[c['commit']['message'] for c in commits]])
         with tempfile.TemporaryDirectory() as folder:
             keywords = Path(folder) / 'keywords'; keywords.write_text(os.environ.get('PRIVACY_KEYWORDS', ''))
@@ -102,12 +105,13 @@ def main():
                 return  # A PR event requests review; it is never an approval.
             raw = base64.b64decode(encoded, validate=True)
             report = validate(raw, os.environ.get('REVIEW_SIGNATURE', ''), pr, files)
-            scan(raw.decode())
+            body = (report['reviewer_device'] + ' 完整代码审查（已验证签名）\n\n```json\n'
+                    + json.dumps(report, ensure_ascii=False, indent=2) + '\n```\n')
+            # Scan the exact public rendering, including decoded JSON escapes.
+            scan(body)
         latest = current()
         if (latest['headRefOid'], latest['baseRefOid']) != (sha, pr['baseRefOid']):
             raise ValueError('PR changed while verifying evidence; review again')
-        body = (report['reviewer_device'] + ' 完整代码审查（已验证签名）\n\n```json\n'
-                + json.dumps(report, ensure_ascii=False, indent=2) + '\n```\n')
         with tempfile.NamedTemporaryFile(mode='w', suffix='.md') as file:
             file.write(body); file.flush()
             gh('pr', 'comment', str(number), '-R', repo, '--body-file', file.name)

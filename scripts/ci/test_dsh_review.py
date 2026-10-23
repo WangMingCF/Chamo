@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import pytest
+import hashlib
 
 spec = importlib.util.spec_from_file_location('review', Path(__file__).with_name('dsh_review.py'))
 review = importlib.util.module_from_spec(spec); spec.loader.exec_module(review)
@@ -54,3 +55,60 @@ def test_another_registered_device_can_review(signed):
     report['reviewer_device'] = 'NAS-DSH'
     with pytest.raises(ValueError, match='independent'):
         review.validate(*sign(report), pr, ['engine/a.py'], key)
+
+
+def publication(signed, monkeypatch, report, patch, secret, files=None, escaped_ascii=False):
+    """Only GitHub transport is replaced; signature and privacy scan are real."""
+    _, pr, key, sign = signed
+    raw, signature = sign(report)
+    if escaped_ascii:
+        # Produce an authentic signature over escaped ASCII as well as Unicode.
+        report_path = key.parent/'data'; signature_path = key.parent/'sig'
+        raw = raw.replace(secret.encode(), ''.join('\\u%04x' % ord(c) for c in secret).encode())
+        report_path.write_bytes(raw)
+        subprocess.run(['openssl', 'pkeyutl', '-sign', '-inkey', str(key.parent/'key'),
+                        '-rawin', '-in', str(report_path), '-out', str(signature_path)], check=True)
+        signature = base64.b64encode(signature_path.read_bytes()).decode()
+    monkeypatch.setattr(review, 'KEYS', key.parent)
+    (key.parent/'Mac-DSH.pub').write_bytes(key.read_bytes())
+    for name, value in {'GITHUB_REPOSITORY':'example/project','PR_NUMBER':'3','RUN_URL':'https://example.invalid/run',
+                        'REVIEW_REPORT':base64.b64encode(raw).decode(),'REVIEW_SIGNATURE':signature,
+                        'PRIVACY_KEYWORDS':f'sha256:{hashlib.sha256(secret.casefold().encode()).hexdigest()}:{len(secret)}'}.items():
+        monkeypatch.setenv(name,value)
+    published=[]; states=[]
+    def fake_gh(*args):
+        if args[:2]==('pr','view'):
+            return json.dumps({**pr,'state':'OPEN','isCrossRepository':False,'title':'Repair','body':''})
+        if args[:2]==('pr','diff'):
+            return '\n'.join(files or ['engine/a.py']) if '--name-only' in args else patch
+        if args[:2]==('pr','comment'):
+            published.append(Path(args[args.index('--body-file')+1]).read_text()); return ''
+        if args[0]=='api' and '/commits' in args[1]: return '[[]]'
+        if args[0]=='api' and 'POST' in args:
+            states.append(next(a for a in args if a.startswith('state='))); return ''
+        raise AssertionError(args)
+    monkeypatch.setattr(review,'gh',fake_gh)
+    return published,states
+
+
+@pytest.mark.parametrize('secret,ascii_escape', [('SyntheticPrivate',True),('合成隐私标识',False)])
+@pytest.mark.parametrize('verdict', ['APPROVE','REQUEST_CHANGES'])
+def test_exact_public_body_is_scanned(signed,monkeypatch,secret,ascii_escape,verdict):
+    report=signed[0];report.update(summary=secret,verdict=verdict)
+    published,states=publication(signed,monkeypatch,report,'+safe',secret,escaped_ascii=ascii_escape)
+    with pytest.raises(SystemExit):review.main()
+    assert not published and states[-1]=='state=failure'
+
+
+def test_removing_private_text_and_unchanged_context_is_allowed(signed,monkeypatch):
+    report=signed[0]
+    published,states=publication(signed,monkeypatch,report,'-SyntheticPrivate\n SyntheticPrivate\n+removed','SyntheticPrivate')
+    review.main()
+    assert len(published)==1 and states[-1]=='state=success'
+
+
+@pytest.mark.parametrize('patch,files', [('+SyntheticPrivate',None),('+safe',['SyntheticPrivate.py'])])
+def test_new_text_and_paths_remain_protected(signed,monkeypatch,patch,files):
+    published,states=publication(signed,monkeypatch,signed[0],patch,'SyntheticPrivate',files=files)
+    with pytest.raises(SystemExit):review.main()
+    assert not published and states[-1]=='state=failure'

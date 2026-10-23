@@ -123,10 +123,12 @@ def push_mode(rules: Rules, identity: str) -> list[str]:
         if local_ref.startswith("refs/tags/"):
             problems += scan_tag(rules, local_sha, identity)
             local_sha = git("rev-parse", f"{local_sha}^{{commit}}").strip()
+        # Merging already-published main history must not force a new PR.
+        # Newly created merge/feature commits remain subject to every check.
         if remote_sha == ZERO:
             shas = git("rev-list", local_sha, "--not", "--remotes=origin").split()
         else:
-            shas = git("rev-list", f"{remote_sha}..{local_sha}").split()
+            shas = git("rev-list", f"{remote_sha}..{local_sha}", "--not", "--remotes=origin").split()
         problems += scan_commits(rules, shas, identity)
     return problems
 

@@ -11,9 +11,29 @@ DEVICES = {'NAS-DSH', 'Mac-DSH', 'Mac-Claude', 'Mac-Codex'}
 
 
 def catalogue(root):
+    # A linked spec/attachment can escape the reviewable proposal tree.
+    def check_layout(path, top=False):
+        for item in path.iterdir():
+            if item.is_symlink() or not (item.is_dir() or item.is_file()):
+                raise ValueError(f'{item.name}: links and special files are not allowed')
+            if top:
+                if item.is_file() and item.name not in {'README.md', 'INDEX.md'}:
+                    raise ValueError(f'{item.name}: unexpected root file')
+                if item.is_dir() and item.name.startswith('_') and item.name != '_template':
+                    raise ValueError(f'{item.name}: unknown special directory')
+            elif item.is_file():
+                name = item.name.casefold()
+                if (name in {'proposal.json', 'pr.md'}
+                        or (name.startswith('prd') and name.endswith('.md') and item.name != 'PRD.md')):
+                    raise ValueError(f'{item.name}: conflicting specification')
+                if item.name == 'PRD.md' and path.parent != root:
+                    raise ValueError(f'{item.name}: nested specification')
+            if item.is_dir():
+                check_layout(item)
+    check_layout(root, top=True)
     rows = []
     for folder in sorted(root.iterdir()):
-        if not folder.is_dir() or folder.name.startswith('_'):
+        if not folder.is_dir() or folder.name == '_template':
             continue
         text = (folder / 'PRD.md').read_text()
         match = re.search(r'^```json\n(.*?)\n```', text, re.M | re.S)

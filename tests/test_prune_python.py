@@ -63,7 +63,7 @@ def test_a_console_script_marks_the_runtime_as_pending(tmp_path):
 
 
 def test_a_fully_pruned_runtime_is_not_pending(tmp_path):
-    """The state CHAMO_NO_PRUNE requires: nothing left to remove."""
+    """A pruned tree has nothing left for the opt-out guard to reject."""
     runtime = _runtime(tmp_path)
     runtime.joinpath("lib/python3.12/site-packages").rmdir()
     assert prune_python.pending(runtime) is False
