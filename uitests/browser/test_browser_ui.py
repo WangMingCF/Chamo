@@ -186,7 +186,14 @@ def test_cancelling_shows_cancelled_not_failed(page, work):
     page.select_option("#format", "png")
     page.fill("#output", str(work / "out"))
     page.click("#start")
-    page.wait_for_timeout(2000)
+    # Wait for the page to report the file is being worked on instead of sleeping
+    # a fixed time: a fixed 2 s was enough for the whole 300-page run to finish on
+    # a fast runner, and then "cancel" arrived after completion - a red test that
+    # says nothing about cancellation. An item or progress line proves it is in
+    # flight; if the run does finish first, the 已取消 expectation below fails
+    # loudly with the actual status text.
+    expect(page.locator("#status")).to_contain_text(re.compile(r"\[\d+/\d+\]|进度"),
+                                                    timeout=120_000)
     page.click("#cancel")
     expect(page.locator("#status")).to_contain_text("已取消", timeout=180_000)
     status = page.locator("#status").inner_text()
