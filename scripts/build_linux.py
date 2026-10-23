@@ -93,16 +93,40 @@ def installed_size_kb(stage: Path) -> int:
     return max(1, total // 1024)
 
 
+def required_python_minor(stage: Path) -> str:
+    """The CPython minor version the bundled wheels were built for, e.g. "3.12".
+
+    The package ships a venv whose site-packages live under
+    lib/python3.X/site-packages and whose python3 is a symlink to the *host*
+    interpreter, so the C extensions are named cpython-3X-*.so. A host with a
+    different minor version installs the package but cannot import them: on a
+    python3.11 host this reproduced as "ImportError: cannot import name
+    '_imaging' from 'PIL'". The Depends line therefore has to name this exact
+    minor version instead of a loose ">= 3.10".
+    """
+    for candidate in sorted((stage / "opt").rglob("lib/python3.*/site-packages")):
+        return candidate.parent.name.split("python")[-1]
+    raise SystemExit("no opt/**/lib/python3.*/site-packages in the staged tree: "
+                     "cannot derive the Python version the wheels need")
+
+
+def next_minor(minor: str) -> str:
+    """The first minor version that is not compatible: "3.12" -> "3.13"."""
+    major, small = minor.split(".")
+    return "%s.%d" % (major, int(small) + 1)
+
+
 def control(stage: Path, version: str, arch: str) -> None:
     meta = stage / "DEBIAN"
     meta.mkdir(parents=True, exist_ok=True)
+    minor = required_python_minor(stage)
     fields = [
         "Package: chamo-cli",
         "Version: " + version,
         "Architecture: " + arch,
         "Maintainer: Chamo <noreply@example.invalid>",
         "Installed-Size: %d" % installed_size_kb(stage),
-        "Depends: python3 (>= 3.10)",
+        "Depends: python3 (>= %s), python3 (<< %s)" % (minor, next_minor(minor)),
         # Office conversion is the only feature that needs it. Recommends keeps it
         # optional so PDF and image work install and run without it.
         "Recommends: libreoffice-core | libreoffice",
