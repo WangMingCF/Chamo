@@ -132,3 +132,39 @@ def test_missing_configuration_fails_loudly_rather_than_reviewing_with_a_default
     monkeypatch.setenv("REVIEW_API_KEY", KEY)
     assert module.main() == 2
     assert "REVIEW_MODEL" in capsys.readouterr().err
+
+def test_a_transient_outage_is_ridden_out_instead_of_failing_the_check(client, monkeypatch, capsys):
+    """Three attempts with 15/30 s of backoff gave up after ~46 s.
+
+    A required check that dies on a one-minute outage blocks every PR, so the
+    budget must let a recovery land instead of counting attempts.
+    """
+    calls = {"n": 0}
+
+    def flaky(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] < 5:
+            raise http_error("temporarily unavailable")
+        return FakeResponse(json.dumps({"choices": [{"message": {"content": "VERDICT: APPROVE"}}]}).encode())
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(client.sys, "stdin", io.StringIO("review me"))
+    assert client.main() == 0
+    assert "VERDICT: APPROVE" in capsys.readouterr().out
+    assert calls["n"] == 5, "four consecutive failures must not exhaust the retries"
+
+
+def test_the_retry_budget_bounds_the_wait_and_says_so(client, monkeypatch, capsys):
+    """A persistent outage must end near the budget, not after every sleep."""
+    clock = {"now": 0.0}
+    monkeypatch.setattr(client.time, "monotonic", lambda: clock["now"])
+
+    def slow_failure(*_a, **_k):
+        clock["now"] += client.RETRY_BUDGET  # each attempt eats the whole budget
+        raise http_error("still down")
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", slow_failure)
+    monkeypatch.setattr(client.sys, "stdin", io.StringIO("review me"))
+    assert client.main() == 1
+    err = capsys.readouterr().err
+    assert "retry budget" in err, "an exhausted budget must be reported"
