@@ -34,8 +34,8 @@ def _stage(tmp_path: Path, minor: str = "3.12") -> Path:
     site = stage / "opt" / "chamo" / "venv" / "lib" / ("python" + minor) / "site-packages"
     site.mkdir(parents=True)
     (site / "PIL").mkdir()
-    (site / "PIL" / "_imaging.cpython-%s-x86_64-linux-gnu.so" % minor.replace(".", "")).
-        write_bytes(b"\x7fELF synthetic")
+    extension = "PIL/_imaging.cpython-%s-x86_64-linux-gnu.so" % minor.replace(".", "")
+    (site / extension).write_bytes(b"\x7fELF synthetic")
     return stage
 
 
