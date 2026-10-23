@@ -103,14 +103,15 @@
 
 每个版本格式：**目标 / 依据 / 范围 / 验收 / 不得回退 / 风险与待决**。范围内某项被证据否定时，记录到第 6 节，不要硬做。
 
-### 第 0 轮（前置）：发布 0.1.0
+### 第 0 轮（前置）：发布 0.1.0 · **已完成 2026-10-22**
 
 - **目标**：用 GitHub Actions 从干净环境构建并发布第一个 Release。
-- **依据**：仓库尚无 Release；旧发布脚本已删。
+- **依据（立项时的状态）**：仓库尚无 Release；旧发布脚本已删。
+- **完成情况**：`Chamo 0.1.0` 已公开（tag `v0.1.0`，2026-10-22T12:58:01Z，`draft=false`、`prerelease=false`），资产 5 个：DMG 290,336,631 字节、arm64 deb、amd64 deb、Windows zip、`SHA256SUMS.txt`。**已核验**：`SHA256SUMS.txt` 列出全部 4 个资产；重新下载 `chamo-cli_0.1.0_arm64.deb` 的 SHA-256 与清单逐字一致，包内元数据为 `Package: chamo-cli / Version: 0.1.0 / Architecture: arm64`。**未核验**：DMG 挂载安装、deb 在干净容器内转换、zip 在 Windows 解压转换——`.development/logs/` 里没有这三项的记录，需补或明确标注未做。
 - **范围**：`release.yml`（tag 触发）：macOS arm64 runner 用 `bootstrap_dependencies.py` 拉取并校验依赖 → `build_app.py` → `package_dmg.py`；复用现有 deb/zip 作业；生成 `SHA256SUMS.txt`；资产隐私扫描（构建机路径、个人身份）；先建草稿 Release，验证后再公开。
 - **验收**：从 Release 页面重新下载全部资产，SHA-256 与清单一致；DMG 只读挂载、复制安装、启动、PDF 转图片与 PPTX 转 PDF 各一次；deb 在干净容器安装并转换；zip 在 Windows runner 解压并转换；`.pyc` 与资产中无构建机路径。
 - **不得回退**：CI 现有 5 个作业全绿。
-- **待决**：公开发布前问维护者。
+- **待决**：无。原写「公开发布前问维护者」，已被用户授权取代——`.development/RELEASE.md` 明确「普通发布无需再要求用户点确认」；许可证、付费、破坏性迁移等仍按授权边界处理。
 
 ### 0.2.0 · 验证与基准底座（准、快、小的度量衡）· 进行中
 
