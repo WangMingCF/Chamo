@@ -167,25 +167,25 @@ struct FileTable: View {
             // and produced a horizontal scrollbar. The name column is the only one
             // that can absorb slack, so it gets the flexible range and the rest
             // keep their minimums.
-            // Measured on real 1024-point screenshots three times over. The sidebar
-            // and the inspector leave about 498 points for the table, and a column
-            // without a max grows into the space the next one needs: minimums alone
-            // (452) overflowed, then capped minimums with an unbounded name column
-            // still clipped the status column. Every column is capped now and the
-            // maxima sum to 484, so the whole header fits; the name column
+            // Measured on real 1024-point screenshots four times over. The sidebar and
+            // the inspector leave about 498 points for the table; on top of the columns
+            // the table also spends a little on its own insets, so the maxima have to
+            // stay clearly under that budget. 452 (minimums) overflowed, an unbounded
+            // name column grew into the status column, and 484 still left a horizontal
+            // scroller. 448 fits with the status text complete; the name column
             // truncates in the middle and shows the full path in a tooltip.
             TableColumn("名称", value: \.name) { item in NameCell(item: item, index: order[item.id]) }
-                .width(min: 120, ideal: 160, max: 200)
+                .width(min: 110, ideal: 150, max: 180)
             TableColumn("页数", value: \.sortPages) { item in
                 Text(pagesText(item)).foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 44, ideal: 50, max: 56)
+            }.width(min: 44, ideal: 48, max: 52)
             TableColumn("大小", value: \.size) { item in
                 Text(item.size > 0 ? ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file) : "—").foregroundStyle(.secondary).monospacedDigit()
-            }.width(min: 52, ideal: 58, max: 64)
+            }.width(min: 52, ideal: 56, max: 60)
             TableColumn("结果", value: \.sortResult) { item in ResultCell(item: item, compare: m.operation.hasPrefix("image_") || m.operation == "pdf_compress") }
-                .width(min: 52, ideal: 58, max: 64)
+                .width(min: 52, ideal: 56, max: 60)
             TableColumn("状态") { item in StatusCell(item: item, reason: m.incompatibility(item)) }
-                .width(min: 88, ideal: 94, max: 100)
+                .width(min: 84, ideal: 90, max: 96)
         } rows: {
             // Merge tools follow list order, so rows can be dragged into place.
             // Rows carry their id (for merge reordering) and, once converted, the result
