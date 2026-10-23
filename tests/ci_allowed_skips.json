@@ -20,6 +20,11 @@
       "file": "tests/test_shard_equivalence.py",
       "reason": "speed gate skipped because CI is set: the >=1.5x threshold is machine-dependent (acceptance contract allows this skip on CI, and it is NOT a pass). Run on a quiet machine: python scripts/verify_shard.py --mode speed --perf on",
       "why": "shared runners are too noisy for a speed threshold; equivalence is still asserted"
+    },
+    {
+      "file": "tests/test_setup_engine_retry.py",
+      "reason": "the Linux step body needs bash; Windows runs the pwsh variant",
+      "why": "the step under test is shell-specific per platform; Windows uses pwsh and macOS has no GNU timeout(1), so their bounds are asserted from the action source by the other tests in this file"
     }
   ],
   "linux": [

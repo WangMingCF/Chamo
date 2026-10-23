@@ -12,11 +12,23 @@ that can fail, hang or succeed.
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+# These tests run the step's real shell body under bash, which is how the Linux
+# runner executes it. Windows uses pwsh, and macOS has no GNU timeout(1), so the
+# same body cannot be exercised there: the Linux behaviour is covered on the Linux
+# job, while the Windows and macOS bounds are asserted from the action source by
+# the last two tests.
+POSIX_SHELL_ONLY = pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason="the Linux step body needs bash; Windows runs the pwsh variant")
 ACTION = ROOT / ".github" / "actions" / "setup-engine" / "action.yml"
 
 
@@ -90,18 +102,21 @@ HANG_THEN_SUCCEED = (HEADER + RECORD + 'count=$(wc -l < "$LOG")\n'
 ALWAYS_FAIL = HEADER + RECORD + "exit 100\n"
 
 
+@POSIX_SHELL_ONLY
 def test_a_healthy_mirror_installs_on_the_first_attempt(tmp_path):
     result = run_step(tmp_path, SUCCESS)
     assert result.returncode == 0, result.stderr
     assert attempts(tmp_path) == 2, attempts(tmp_path)
 
 
+@POSIX_SHELL_ONLY
 def test_a_quick_failure_is_retried_and_then_succeeds(tmp_path):
     result = run_step(tmp_path, FAIL_THEN_SUCCEED)
     assert result.returncode == 0, result.stderr
     assert attempts(tmp_path) >= 4, attempts(tmp_path)
 
 
+@POSIX_SHELL_ONLY
 def test_a_hanging_attempt_is_bounded_and_then_retried(tmp_path):
     """The shape that broke the ui job: the command never returns."""
     result = run_step(tmp_path, HANG_THEN_SUCCEED)
@@ -109,6 +124,7 @@ def test_a_hanging_attempt_is_bounded_and_then_retried(tmp_path):
     assert attempts(tmp_path) >= 4, attempts(tmp_path)
 
 
+@POSIX_SHELL_ONLY
 def test_three_failures_still_fail_the_step(tmp_path):
     """Retrying must not hide a real breakage."""
     result = run_step(tmp_path, ALWAYS_FAIL, installs_soffice=False)
@@ -142,6 +158,7 @@ def test_the_macos_attempt_does_not_require_gnu_timeout():
     assert "bounded_brew" in macos, "the macOS bound must be done in the shell"
 
 
+@POSIX_SHELL_ONLY
 def test_the_macos_bound_terminates_a_hung_child():
     """The shell bound must kill an overrunning child and report it as a failure."""
     source = ACTION.read_text(encoding="utf-8")
