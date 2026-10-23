@@ -51,15 +51,15 @@
 - **多端功能单测**：按 `docs/CI_TESTING.md` 补测试并确认对应 CI 作业覆盖；它列出了每个必需检查覆盖什么、新功能必须补哪些用例、哪些部分 CI 覆盖不到。
 - **CI 不等于产品测试**：CI 覆盖引擎与打包；macOS GUI 需在打包后的应用里点击验证（`-D CHAMO_DEBUG` 钩子与截图）。
 
-## 3. 当前状态（2026-10-22，已核实）
+## 3. 当前状态（2026-10-23 复核）
 
 | 项 | 状态 |
 | --- | --- |
-| 代码 | `main` = `3f03e18`；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
+| 代码 | `main` = `ce3ca61`（2026-10-23T17:56Z 复核，此前这里记的 `3f03e18` 已落后）；Swift 界面约 3,130 行，引擎约 7,700 行（含 `cloud_kb_pack`）；266 个 Python 测试 + 2 组 Swift 测试 |
 | 竞品 | `docs/COMPETITORS.md` 已入库：15 个产品、两张矩阵、每格标证据等级；**没有任何实测**，两处官方页面抓不到已标「待复核」，Kumquat 官网 404 未列入 |
 | 基准 | `scripts/bench_corpus.py`、`scripts/bench.py`、`scripts/bench_quality.py` 与 `tests/test_bench.py` 在 **PR #18**（三端 `test-matrix` 各 9/9 通过），合并前不作为基线引用 |
 | CI | `cross-platform`（汇总检查 `all checks`）：三端引擎测试（真实 LibreOffice，按 `tests/ci_allowed_skips.json` 判定跳过）、Linux deb 与 Windows zip 装包后转换、Swift 编译与单测、自循环工具测试；`test-matrix` 按需或每晚跑多平台并重复运行找不稳定测试；`agent-review` 独立评审。`docs/CI_TESTING.md` 第 8 节的两个间歇失败已修复；**新发现 macOS 上 `content.text.timing` 仍偶发**（10 次里失败 1 次），见 Issue #10。Linux 引擎作业只装 Writer/Impress，**没有 Calc**，`.xlsx` 转换在 Linux CI 从未被验证 |
-| 发布 | **尚无任何 Release**。旧的本地发布脚本已删除，需要 GitHub Actions 发布流程 |
+| 发布 | **已发布 `Chamo 0.1.0`**：tag `v0.1.0`，2026-10-22T12:58:01Z，GitHub 标记 Latest。发布按 `.development/RELEASE.md` 执行；签名/公证状态见下一行，如实为 ad-hoc 与未签名 |
 | 签名 | macOS ad-hoc，未做 Developer ID 签名与公证；Windows 未签名 |
 | 能力 | PDF 转图片（分片成本模型、页级续跑）、PDF 拆分/合并/压缩、Office/WPS 转 PDF/图片、图片合成 PDF、图片转换/压缩、RAG 严格预处理；CLI `chamo`、本机浏览器界面 `chamo ui` |
 | 明确未实现 | OCR、PDF 转可编辑 Office、长图、多帧拆分、命名模板、目标体积、空间预估、Office 转换前审计、报告导出、Finder 快捷动作（直接转换）、压缩包解包、音视频 |
@@ -103,19 +103,20 @@
 
 每个版本格式：**目标 / 依据 / 范围 / 验收 / 不得回退 / 风险与待决**。范围内某项被证据否定时，记录到第 6 节，不要硬做。
 
-### 第 0 轮（前置）：发布 0.1.0
+### 第 0 轮（前置）：发布 0.1.0 · **已完成 2026-10-22**
 
 - **目标**：用 GitHub Actions 从干净环境构建并发布第一个 Release。
-- **依据**：仓库尚无 Release；旧发布脚本已删。
+- **依据（立项时的状态）**：仓库尚无 Release；旧发布脚本已删。
+- **完成情况**：`Chamo 0.1.0` 已公开（tag `v0.1.0`，2026-10-22T12:58:01Z，`draft=false`、`prerelease=false`），资产 5 个：DMG 290,336,631 字节、arm64 deb、amd64 deb、Windows zip、`SHA256SUMS.txt`。**已核验**：`SHA256SUMS.txt` 列出全部 4 个资产；重新下载 `chamo-cli_0.1.0_arm64.deb` 的 SHA-256 与清单逐字一致，包内元数据为 `Package: chamo-cli / Version: 0.1.0 / Architecture: arm64`。**未核验**：DMG 挂载安装、deb 在干净容器内转换、zip 在 Windows 解压转换——`.development/logs/` 里没有这三项的记录，需补或明确标注未做。
 - **范围**：`release.yml`（tag 触发）：macOS arm64 runner 用 `bootstrap_dependencies.py` 拉取并校验依赖 → `build_app.py` → `package_dmg.py`；复用现有 deb/zip 作业；生成 `SHA256SUMS.txt`；资产隐私扫描（构建机路径、个人身份）；先建草稿 Release，验证后再公开。
 - **验收**：从 Release 页面重新下载全部资产，SHA-256 与清单一致；DMG 只读挂载、复制安装、启动、PDF 转图片与 PPTX 转 PDF 各一次；deb 在干净容器安装并转换；zip 在 Windows runner 解压并转换；`.pyc` 与资产中无构建机路径。
 - **不得回退**：CI 现有 5 个作业全绿。
-- **待决**：公开发布前问维护者。
+- **待决**：无。原写「公开发布前问维护者」，已被用户授权取代——`.development/RELEASE.md` 明确「普通发布无需再要求用户点确认」；许可证、付费、破坏性迁移等仍按授权边界处理。
 
 ### 0.2.0 · 验证与基准底座（准、快、小的度量衡）· 进行中
 
 > 状态（2026-10-22）：**部分完成**。已做：确定性合成语料（smoke / representative / holdout 三套）、统一运行器（N 次重复、中位数与波动、强制关页缓存、记录机器与依赖版本、JSON 输出）、逐格式质量检查器（逐页与 pdfium 同 dpi 比对、无损图片逐像素、拆分页并集、压缩后文字层、RAG 导出哈希），以及「五类作弊必须被判红」的测试（PR #18）。
-> 未做：① 第 4.1 节数字的复现（需要打包后的 `.app`，等发布流水线）；② 同口径竞品实测（需要把开源工具装进 runner）；③ CI 里的独立基准作业（要改 `.github/`，属受保护路径）。
+> 未做：① 第 4.1 节数字的复现（**打包后的 `.app` 已经可得**：0.1.0 的 `Chamo-0.1.0-AppleSilicon.dmg` 已随公开 Release 发布，见第 3 节；缺的是在 0.2.0 候选上重跑并把数字写回第 4 节，而不是等流水线）；② 同口径竞品实测（需要把开源工具装进 runner）；③ CI 里的独立基准作业（要改 `.github/`，属受保护路径）。
 
 - **目标**：让后面 19 个版本的每个「更快/更小/更准」都有可复跑的同口径证据。
 - **依据**：旧研究的基准脚本在仓库外，口径不统一；本轮发现页缓存会让 PDF 基准失真 2.3 倍。
@@ -266,5 +267,5 @@
 | 无 Apple Developer ID / 公证 | 首次打开被 Gatekeeper 拦截 | 维护者决定是否付费；在此之前所有文档写明 ad-hoc |
 | 无 Windows 代码签名 | SmartScreen 警告 | 同上 |
 | 真实样本 | OCR 与 Office 保真需要真实文档验收 | 只用维护者提供的小份只读样本，不入库 |
-| `agent-review` 服务对大 diff 无响应 | 评审作业 15 分钟以上不出结果、或 5 分钟被对端断开，PR 无法合并 | 已在 #5 请维护者核查代理的读超时与配置；开发侧对策是把 PR 拆小 |
+| **`agent-review` 评审模型端点不可用**（自 2026-10-23T06:40:15Z 起持续） | 所有**非受保护路径**的 PR 都无法合并。实测日志原文：`review_llm: attempt 1/3 failed: HTTPError 503`。**注意不是单一错误码**：多数 run 只报 503，但 `18:14:47Z`、`18:46:39Z`、`19:26:20Z` 三次 run 的**首次尝试返回 `HTTPError 403`**，重试才落到 503。503 是服务不可用、403 属权限/鉴权类，两者并存意味着「服务过载」与「key 对 `glm-5.3-flash` 失去访问权」都不能排除。**与 diff 大小无关**——只有 2 个文件的 PR（`fddfc6e`、`885b8b7`）同样失败，旧对策「把 PR 拆小」已被证伪 | 需维护者检查 `REVIEW_MODEL` / `REVIEW_API_BASE` / `REVIEW_API_KEY`（模型是否下线、端点是否过载）。**注意别误读**：受保护路径的 PR 在 Actions 里显示 `success`，那是短路分支（同一提交的 status 同时写「改动受保护路径，需要维护者亲自审核」），**不代表评审可用** |
 | Linux CI 缺 LibreOffice Calc | `.xlsx` 转换在 Linux 上没有任何自动化验证 | 建议在 `.github/actions/setup-engine` 增加 `libreoffice-calc`（受保护路径，需维护者审核） |
