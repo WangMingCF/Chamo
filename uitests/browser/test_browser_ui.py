@@ -186,7 +186,17 @@ def test_cancelling_shows_cancelled_not_failed(page, work):
     page.select_option("#format", "png")
     page.fill("#output", str(work / "out"))
     page.click("#start")
-    page.wait_for_timeout(2000)
+    # Wait for progress that has actually started instead of sleeping a fixed time
+    # (2 s was enough for the whole 300-page run to finish on a fast runner). The
+    # marker has to be one that exists only while pages are being rendered: the
+    # item line is not such a marker - it appears as "[None/?] ... running" at the
+    # start and again as "[1/1] ... 完成" at the end, so matching an item-line shape
+    # was satisfied by the completion line and the cancel then arrived after the run
+    # had finished (observed on the Linux runner: 242/300 pages still going, then
+    # the assertion timed out on a completed run). A non-zero progress numerator
+    # cannot appear before work starts or after it ends.
+    expect(page.locator("#status")).to_contain_text(re.compile(r"进度 [1-9]\d*/"),
+                                                    timeout=120_000)
     page.click("#cancel")
     expect(page.locator("#status")).to_contain_text("已取消", timeout=180_000)
     status = page.locator("#status").inner_text()
