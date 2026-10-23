@@ -22,19 +22,8 @@ python -m pytest uitests/browser -q
 
 新增界面功能时，至少补一条端到端剧本：操作 → 等待完成 → 断言输出文件内容与原件不变；有固定画面的再加一张基准截图。
 
-剧本步骤（`Scenario` 解析的键）：
-
-| 键 | 作用 |
-| --- | --- |
-| `tool` / `route` | 切换工具或页面 |
-| `add` / `output` / `set` | 加入文件、设输出目录、改格式与参数 |
-| `appearance` | light / dark |
-| `resize` | 显式设定窗口内容尺寸（例：width 1024、height 700）。runner 的默认尺寸取决于显示器，窄窗口检查必须显式设定；载荷非法会让步骤失败而不是静默跳过 |
-| `start` / `cancel` / `retry` / `sleep` / `wait` | 控制一次运行 |
-| `snapshot` / `summary` | 截图、导出状态 JSON |
-
 ## 已知问题
 
 - macOS 进程内截图（`cacheDisplay`）在本机 Mac 上可能画不出使用系统毛玻璃材质的侧栏和工具栏，GitHub 的 macOS runner 上则能正常画出；基准截图一律以 runner 为准。"已添加"这类提示几秒后才消失，需要比对的截图前要先等它消失。
-- 窄窗口（1024）下列表列被截断的问题已修复（Issue #12）：五列都设了显式上限，合计小于表格视口。它现在由剧本 `test_the_window_at_1024_keeps_every_column_readable` 和基准 `macos/narrow-window.png` 守着——基准是 1024×700 的截图，改了列宽就会变成像素差异。
+- runner 上应用窗口的默认宽度是 1024，PDF 转图片的文件列表在这个宽度下"大小"一列被截断、出现横向滚动条（见基准 `macos/pdf-images-ready.png`）。这是窄窗口下的布局问题，修复后要更新这张基准。
 
