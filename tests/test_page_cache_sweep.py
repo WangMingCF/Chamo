@@ -103,3 +103,21 @@ def test_a_stale_marker_is_dropped_so_the_set_can_be_collected(tmp_path, monkeyp
 
     assert not marker.exists(), "a killed writer's marker must not protect the set forever"
     assert result["markers"] == 1
+
+def test_the_size_bound_evicts_the_least_recently_used_set_first(tmp_path, monkeypatch):
+    # Both sets are past nothing in age terms, so only the size bound can act; the
+    # older one has to go first and the newer one has to survive.
+    base = cache_base(tmp_path)
+    older = make_set(base, "s1", "older", pages=1, size=1000)
+    newer = make_set(base, "s2", "newer", pages=1, size=1000)
+    age_folder(older, 5000)
+    age_folder(newer, 100)
+    monkeypatch.setenv("CHAMO_PAGE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("CHAMO_PAGE_CACHE", raising=False)
+    monkeypatch.setenv("CHAMO_PAGE_CACHE_MAX_AGE", "999999999")
+    monkeypatch.setenv("CHAMO_PAGE_CACHE_MAX_BYTES", "1500")   # room for one set only
+
+    platform_state.sweep_page_cache()
+
+    assert not older.exists(), "the least recently used set is evicted first"
+    assert newer.is_dir(), "the newer set fits once the older one is gone"
