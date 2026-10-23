@@ -172,6 +172,44 @@ def _ssim_single(a, b, width, height, window: int) -> float:
     return total / count if count else 0.0
 
 
+def _has_alpha(image) -> bool:
+    """Whether this image carries transparency that a JPEG output cannot keep.
+
+    A palette PNG stores transparency in a "transparency" info key rather than in
+    its mode, so the mode alone would miss it.
+    """
+    return image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info
+
+
+def flatten_for_comparison(left, right):
+    """Put a transparent source and an opaque output on the same footing.
+
+    JPEG cannot hold alpha, so the engine flattens a transparent source onto white
+    before encoding (engine/workbench.py: Image.new('RGB', size, 'white') pasted
+    through the alpha mask). Comparing that output against the source's raw colour
+    channels - alpha simply dropped - measures the background colour rather than
+    the compression: a (40,100,200,alpha 150) region scored SSIM 0.8861 while the
+    same source composited on white scores 0.9996. A false FAIL.
+
+    Only a side that has alpha facing a side that has none is flattened, so
+    alpha-to-alpha comparisons are untouched. This helper's shape comes from the
+    reviewer's independent counter-example (Mac-Claude, PR #47 B4).
+    """
+    from PIL import Image
+
+    def flat(image):
+        rgba = image.convert("RGBA")
+        base = Image.new("RGB", rgba.size, (255, 255, 255))
+        base.paste(rgba, mask=rgba.getchannel("A"))
+        return base
+
+    if _has_alpha(left) and not _has_alpha(right):
+        return flat(left), right
+    if _has_alpha(right) and not _has_alpha(left):
+        return left, flat(right)
+    return left, right
+
+
 def ssim(left, right, sample: int = 64, window: int = 7) -> float:
     """Structural similarity of two images, averaged over their colour planes."""
     # A grey picture and its RGB twin are the same picture: a lossy pass may well
@@ -179,6 +217,7 @@ def ssim(left, right, sample: int = 64, window: int = 7) -> float:
     # colour, so the plane counts always match. Returning 0.0 on a plane-count
     # mismatch scored a near-lossless grey result as "SSIM 0.0000" while its PSNR
     # was 72-92 dB - a contradiction, and a false FAIL for every grey input.
+    left, right = flatten_for_comparison(left, right)
     if (left.mode in ("RGB", "RGBA")) != (right.mode in ("RGB", "RGBA")):
         left, right = left.convert("RGB"), right.convert("RGB")
     left_planes, right_planes = _planes(left), _planes(right)
