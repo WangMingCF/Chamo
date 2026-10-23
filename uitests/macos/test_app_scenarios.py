@@ -180,7 +180,7 @@ def test_an_empty_tool_page_does_not_crash(work):
     with the panel missing is not a fix, so the summary must report the panel
     actually opened. On macOS 15 the abort itself still cannot be reproduced; the
     real verdict on the crash comes from the macOS 27 request
-    verify-tool-inspector-constraint-20261023b.
+    verify-tool-inspector-constraint-20261023d.
     """
     out = run(work, "empty-tool", [{"tool": "pdf_images"}, {"sleep": 1},
                                    {"snapshot": "empty-tool"},

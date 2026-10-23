@@ -20,7 +20,7 @@ struct WorkspaceView: View {
         // to the NavigationSplitView in ContentView and the panel then never rendered at
         // all (Mac-DSH ac2/ac4 on c9c0d18: right side empty); that relocation is reverted.
         //
-        // [Hypothesis: verify-tool-inspector-constraint-20261023b] What forces the window
+        // [Hypothesis: verify-tool-inspector-constraint-20261023d] What forces the window
         // past a 1024-point screen is the *sum* of this column's minimum and the window's
         // own minimum (980 + 300 = 1280), so the window's minimum is what is lowered while
         // a tool page is open - see the note in ChamoApp.swift. This column's width is

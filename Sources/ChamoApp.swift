@@ -10,7 +10,8 @@ struct ContentView: View {
     // past a 1024-point screen (1281x744 screenshots against a 1024x692 baseline). On
     // macOS 27 that same layout fight is the suspected cause of "more Update Constraints
     // in Window passes than there are views". Lowering the window's minimum while a tool
-    // page is open keeps the total at 980 whether the panel is showing or not.
+    // page is open keeps the total at 980 with the panel open, and below it when the
+    // panel is closed - never above the width that has to fit.
     //
     // Route.tool carries the tool id, so this is a pattern match, not an equality test:
     // writing `m.route == .tool` does not compile.
