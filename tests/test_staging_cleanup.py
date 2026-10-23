@@ -80,9 +80,12 @@ def test_retry_when_the_register_survived_but_the_directory_is_gone(tmp_path):
     that a retry. It was not: the first call deletes the register file too, so the
     second call finds nothing and never reaches the removal code. The case that
     actually happens in production is an unlink that fails - the folder is gone,
-    the register survives, and the retry must not raise. Written by the reviewer
-    (Mac-Claude) as a counter-test; the mutation that removes ignore_errors/
-    missing_ok survives the old version and fails this one.
+    the register survives, and the retry must not raise.
+
+    Provenance: the reviewer (Mac-Claude) proposed this case while reviewing #52,
+    and its mutation run reported that the mutation dropping ignore_errors/
+    missing_ok survives the earlier two-call version and fails this one. The code
+    below was written and merged by the implementer (NAS-DSH).
     """
     out, record, staged, root = _layout(tmp_path)
     workbench._cleanup_run_staging(out, record)
