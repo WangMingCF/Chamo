@@ -912,32 +912,43 @@ def _office_batch_run(sources, cfg, size, cancelled):
         if path.suffix.lower() not in OFFICE or office_container_problem(path) or path.stem.lower() in seen:continue
         seen.add(path.stem.lower());candidates.append(path)
     timeout=cfg.get('timeout',600)
-    for number,start in enumerate(range(0,len(candidates),size)):
-        if cancelled():return
-        chunk=candidates[start:start+size]
-        target=BATCH_DIR/f'out-{number}';target.mkdir()
-        # spawn_group puts soffice and everything it starts (oosplash, soffice.bin) in one
-        # group, so a timeout reaches all of them: killing only the direct child leaves
-        # the real renderer running on Linux and Windows, where `soffice` is a launcher.
+    chunks=[candidates[start:start+size] for start in range(0,len(candidates),size)]
+    if not chunks:return
+    # The engine runs at most three LibreOffice processes at a time (memory), so the
+    # batches run on the same budget instead of one after another.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(3,len(chunks))) as pool:
+        futures=[pool.submit(_office_batch_chunk,exe,chunk,number,timeout,cancelled) for number,chunk in enumerate(chunks)]
+        for future in futures:
+            for path,pdf in future.result():BATCH_PDFS[str(path)]=pdf
+
+def _office_batch_chunk(exe, chunk, number, timeout, cancelled):
+    """One soffice call for one batch; returns only the (source, pdf) pairs that check out."""
+    if cancelled():return []
+    target=BATCH_DIR/f'out-{number}';target.mkdir()
+    # spawn_group puts soffice and everything it starts (oosplash, soffice.bin) in one
+    # group, so a timeout reaches all of them: killing only the direct child leaves
+    # the real renderer running on Linux and Windows, where `soffice` is a launcher.
+    try:
+        proc=spawn_group([str(exe),'-env:UserInstallation='+(BATCH_DIR/f'profile-{number}').as_uri(),'--headless','--nologo','--nodefault','--nofirststartwizard','--norestore','--convert-to','pdf','--outdir',str(target),*map(str,chunk)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
+    except OSError:
+        return []                          # the whole batch falls back to single-file conversion
+    try:
+        proc.communicate(timeout=min(timeout*len(chunk),3600))
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        with contextlib.suppress(Exception):proc.communicate(timeout=30)
+        return []
+    except BaseException:
+        kill_tree(proc)
+        raise
+    good=[]
+    for path in chunk:
+        pdf=target/(path.stem+'.pdf')
         try:
-            proc=spawn_group([str(exe),'-env:UserInstallation='+(BATCH_DIR/f'profile-{number}').as_uri(),'--headless','--nologo','--nodefault','--nofirststartwizard','--norestore','--convert-to','pdf','--outdir',str(target),*map(str,chunk)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env={**os.environ,'PYTHONDONTWRITEBYTECODE':'1'})
-        except OSError:
-            continue                       # the whole chunk falls back to single-file conversion
-        try:
-            proc.communicate(timeout=min(timeout*len(chunk),3600))
-        except subprocess.TimeoutExpired:
-            kill_tree(proc)
-            with contextlib.suppress(Exception):proc.communicate(timeout=30)
-            continue
-        except BaseException:
-            kill_tree(proc)
-            raise
-        for path in chunk:
-            pdf=target/(path.stem+'.pdf')
-            try:
-                if pdf.is_file() and pdf.stat().st_size>0 and len(reader(pdf).pages)>0:BATCH_PDFS[str(path)]=pdf
-            except Exception:                # noqa: BLE001 - an unreadable result is simply not used
-                pass
+            if pdf.is_file() and pdf.stat().st_size>0 and len(reader(pdf).pages)>0:good.append((path,pdf))
+        except Exception:                    # noqa: BLE001 - an unreadable result is simply not used
+            pass
+    return good
 
 def office_batch_clear():
     global BATCH_DIR

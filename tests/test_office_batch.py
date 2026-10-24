@@ -107,11 +107,41 @@ def test_a_batch_that_times_out_falls_back_and_does_not_fail_the_run(monkeypatch
     assert len(killed) == 1, "a timed-out batch must have its whole process tree killed"
 
 
-def test_cancel_stops_before_the_next_batch(fake_soffice, tmp_path):
+def test_cancel_stops_batches_that_have_not_started(fake_soffice, tmp_path):
     cfg, calls = fake_soffice
-    files = [_zip(tmp_path / f"d{i}.pptx") for i in range(6)]
-    workbench.office_batch_prepare([*map(str, files)], cfg, 2, cancelled=lambda: len(calls) >= 1)
-    assert len(calls) == 1
+    files = [_zip(tmp_path / f"d{i}.pptx") for i in range(12)]
+    # 6 batches, at most 3 soffice processes at once: once 3 have started, cancel.
+    workbench.office_batch_prepare([*map(str, files)], cfg, 2, cancelled=lambda: len(calls) >= 3)
+    assert 3 <= len(calls) < 6, "batches that had not started must not start after a cancel"
+    calls.clear()
+    workbench.office_batch_prepare([*map(str, files)], cfg, 2, cancelled=lambda: True)
+    assert calls == [], "a cancel before the start must spawn nothing"
+
+
+def test_batches_run_concurrently_but_never_more_than_three(fake_soffice, tmp_path, monkeypatch):
+    import threading
+    import time
+    cfg, _ = fake_soffice
+    real = workbench.spawn_group
+    live = {"now": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def slow(argv, **kwargs):
+        with lock:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        time.sleep(0.15)
+        try:
+            return real(argv, **kwargs)
+        finally:
+            with lock:
+                live["now"] -= 1
+
+    monkeypatch.setattr(workbench, "spawn_group", slow)
+    files = [_zip(tmp_path / f"d{i}.pptx") for i in range(16)]
+    workbench.office_batch_prepare([*map(str, files)], cfg, 2)   # 8 batches
+    assert 2 <= live["peak"] <= 3, live
+    assert len(workbench.BATCH_PDFS) == 16
 
 
 def test_office_pdf_uses_the_batched_pdf_without_starting_soffice(monkeypatch, fake_soffice, tmp_path):
